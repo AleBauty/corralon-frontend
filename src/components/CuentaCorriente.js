@@ -116,7 +116,6 @@ export default function CuentaCorriente() {
   const colorLimite   = pctUsado >= 90 ? 'var(--rojo)' : pctUsado >= 70 ? 'var(--amarillo)' : 'var(--verde)';
 
   const deudaDeudas   = deudas.filter(d => parseFloat(d.saldo_pendiente) > 0);
-  const deudaCanceladas = deudas.filter(d => parseFloat(d.saldo_pendiente) <= 0.01);
 
   return (
     <div>
