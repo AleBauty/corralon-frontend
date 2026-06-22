@@ -31,8 +31,8 @@ const TODAS_SECCIONES = [
 
 const SECCIONES_POR_ROL = {
   admin:            ['productos', 'clientes', 'proveedores', 'ventas', 'presupuestos', 'pedidos', 'empleados', 'asistencias', 'vehiculos', 'cuentaCorriente', 'reportes', 'egresos'],
-  vendedor:         ['ventas', 'clientes', 'asistencias', 'presupuestos'],
-  gerente_finanzas: ['ventas', 'reportes', 'cuentaCorriente', 'egresos'],
+  vendedor:         ['ventas', 'clientes', 'asistencias', 'presupuestos', 'cuentaCorriente'],
+  gerente_finanzas: ['ventas', 'reportes', 'cuentaCorriente', 'egresos', 'vehiculos'],
 };
 
 const ETIQUETA_ROL = {
