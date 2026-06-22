@@ -19,7 +19,7 @@ function validar(form, esEdicion) {
   if (!esEdicion) {
     if (!form.cuit.trim())
       e.cuit = 'El CUIT es obligatorio';
-    else if (!/^[\d\-]{10,13}$/.test(form.cuit.trim()))
+    else if (!/^[\d-]{10,13}$/.test(form.cuit.trim()))
       e.cuit = 'Formato inválido (ej: 20-11111111-1)';
   }
   if (!form.nombre.trim())
