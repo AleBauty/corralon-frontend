@@ -1,38 +1,52 @@
 import { useState } from 'react';
-import Login          from './components/Login';
-import Dashboard      from './components/Dashboard';
-import Productos      from './components/Productos';
-import Clientes       from './components/Clientes';
-import Proveedores    from './components/Proveedores';
-import Ventas         from './components/Ventas';
-import Pedidos        from './components/Pedidos';
-import Presupuestos   from './components/Presupuestos';
-import Empleados      from './components/Empleados';
-import Asistencias    from './components/Asistencias';
-import Vehiculos      from './components/Vehiculos';
+import {
+  Menu, X, LogOut,
+  LayoutDashboard, ShoppingCart, FileText, Package,
+  Users, Boxes, Truck, Navigation, BarChart2,
+  CreditCard, Banknote, UserCheck, Clock,
+} from 'lucide-react';
+import Login           from './components/Login';
+import Dashboard       from './components/Dashboard';
+import Productos       from './components/Productos';
+import Clientes        from './components/Clientes';
+import Proveedores     from './components/Proveedores';
+import Ventas          from './components/Ventas';
+import Pedidos         from './components/Pedidos';
+import Presupuestos    from './components/Presupuestos';
+import Empleados       from './components/Empleados';
+import Asistencias     from './components/Asistencias';
+import Vehiculos       from './components/Vehiculos';
 import CuentaCorriente from './components/CuentaCorriente';
-import Reportes       from './components/Reportes';
-import Egresos        from './components/Egresos';
+import Reportes        from './components/Reportes';
+import Egresos         from './components/Egresos';
 import './App.css';
 
 const TODAS_SECCIONES = [
-  { id: 'dashboard',       label: 'Dashboard',      icono: '🏠' },
-  { id: 'productos',       label: 'Productos',      icono: '🧱' },
-  { id: 'clientes',        label: 'Clientes',       icono: '👤' },
-  { id: 'proveedores',     label: 'Proveedores',    icono: '🚛' },
-  { id: 'ventas',          label: 'Ventas',         icono: '🧾' },
-  { id: 'presupuestos',    label: 'Presupuestos',   icono: '📄' },
-  { id: 'pedidos',         label: 'Pedidos',        icono: '📦' },
-  { id: 'empleados',       label: 'Empleados',      icono: '👷' },
-  { id: 'asistencias',     label: 'Asistencias',    icono: '🕐' },
-  { id: 'vehiculos',       label: 'Logística',      icono: '🚚' },
-  { id: 'cuentaCorriente', label: 'Cta. Corriente', icono: '💳' },
-  { id: 'reportes',        label: 'Reportes',       icono: '📈' },
-  { id: 'egresos',         label: 'Egresos',        icono: '💰' },
+  { id: 'dashboard',       label: 'Dashboard',       Icon: LayoutDashboard },
+  { id: 'ventas',          label: 'Ventas',           Icon: ShoppingCart },
+  { id: 'presupuestos',    label: 'Presupuestos',     Icon: FileText },
+  { id: 'pedidos',         label: 'Pedidos',          Icon: Package },
+  { id: 'clientes',        label: 'Clientes',         Icon: Users },
+  { id: 'productos',       label: 'Productos',        Icon: Boxes },
+  { id: 'proveedores',     label: 'Proveedores',      Icon: Truck },
+  { id: 'vehiculos',       label: 'Logística',        Icon: Navigation },
+  { id: 'reportes',        label: 'Reportes',         Icon: BarChart2 },
+  { id: 'cuentaCorriente', label: 'Cta. Corriente',   Icon: CreditCard },
+  { id: 'egresos',         label: 'Egresos',          Icon: Banknote },
+  { id: 'empleados',       label: 'Empleados',        Icon: UserCheck },
+  { id: 'asistencias',     label: 'Asistencias',      Icon: Clock },
+];
+
+const NAV_GRUPOS = [
+  { grupo: 'Comercial',      ids: ['ventas', 'presupuestos', 'pedidos', 'clientes'] },
+  { grupo: 'Inventario',     ids: ['productos', 'proveedores'] },
+  { grupo: 'Logística',      ids: ['vehiculos'] },
+  { grupo: 'Administración', ids: ['reportes', 'cuentaCorriente', 'egresos'] },
+  { grupo: 'Personal',       ids: ['empleados', 'asistencias'] },
 ];
 
 const SECCIONES_POR_ROL = {
-  admin:            ['dashboard', 'productos', 'clientes', 'proveedores', 'ventas', 'presupuestos', 'pedidos', 'empleados', 'asistencias', 'vehiculos', 'cuentaCorriente', 'reportes', 'egresos'],
+  admin:            ['dashboard', 'ventas', 'presupuestos', 'pedidos', 'clientes', 'productos', 'proveedores', 'vehiculos', 'reportes', 'cuentaCorriente', 'egresos', 'empleados', 'asistencias'],
   vendedor:         ['ventas', 'clientes', 'asistencias', 'presupuestos', 'cuentaCorriente'],
   gerente_finanzas: ['ventas', 'reportes', 'cuentaCorriente', 'egresos', 'vehiculos'],
   logistica:        ['vehiculos', 'asistencias'],
@@ -45,9 +59,10 @@ const ETIQUETA_ROL = {
   logistica:        'Encargado Logística',
 };
 
-function seccionesParaRol(rol) {
-  const ids = SECCIONES_POR_ROL[rol] ?? [];
-  return TODAS_SECCIONES.filter(s => ids.includes(s.id));
+const MAPA_SECCIONES = Object.fromEntries(TODAS_SECCIONES.map(s => [s.id, s]));
+
+function iniciales(nombre) {
+  return nombre.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
 }
 
 function renderContenido(seccion) {
@@ -75,69 +90,122 @@ function App() {
     catch { return null; }
   });
   const [seccion, setSeccion] = useState('ventas');
+  const [sidebarAbierto, setSidebarAbierto] = useState(false);
 
   const handleLogin = data => {
-    const primera = seccionesParaRol(data.rol)[0]?.id ?? 'ventas';
-    setSeccion(primera);
+    const permitidos = SECCIONES_POR_ROL[data.rol] ?? [];
+    setSeccion(permitidos[0] ?? 'ventas');
     setUsuario(data);
   };
 
   const handleLogout = () => {
     sessionStorage.removeItem('usuario');
     setUsuario(null);
+    setSidebarAbierto(false);
   };
 
   if (!usuario) return <Login onLogin={handleLogin} />;
 
-  const secciones      = seccionesParaRol(usuario.rol);
-  const seccionVisible = secciones.find(s => s.id === seccion) ? seccion : (secciones[0]?.id ?? 'ventas');
+  const permitidosSet  = new Set(SECCIONES_POR_ROL[usuario.rol] ?? []);
+  const seccionVisible = permitidosSet.has(seccion) ? seccion : ([...permitidosSet][0] ?? 'ventas');
+  const seccionInfo    = MAPA_SECCIONES[seccionVisible];
+
+  const navegar = id => { setSeccion(id); setSidebarAbierto(false); };
 
   return (
-    <div className="layout">
-      <aside className="sidebar">
-        <div className="sidebar-logo">
-          <span className="sidebar-brick">🧱</span>
-          <div className="sidebar-brand">
-            <span className="sidebar-nombre">Corralón</span>
-            <span className="sidebar-subtitulo">Virgen de Punta Corral</span>
+    <div className="app-shell">
+
+      {/* ── Header ── */}
+      <header className="app-header">
+        <button className="hamburger" onClick={() => setSidebarAbierto(true)} aria-label="Abrir menú">
+          <Menu size={22} />
+        </button>
+        <div className="header-titulo">
+          {seccionInfo && <seccionInfo.Icon size={20} strokeWidth={2} />}
+          <span>{seccionInfo?.label ?? ''}</span>
+        </div>
+        <div className="header-usuario">
+          <div className="header-usuario-info">
+            <span className="header-usuario-nombre">{usuario.nombre}</span>
+            <span className="header-usuario-rol">{ETIQUETA_ROL[usuario.rol] ?? usuario.rol}</span>
           </div>
+          <div className="avatar">{iniciales(usuario.nombre)}</div>
         </div>
-        <div className="sidebar-divider" />
+      </header>
 
-        {/* Info usuario */}
-        <div style={{ padding: '8px 16px 12px', fontSize: 12 }}>
-          <div style={{ fontWeight: 700, color: 'var(--texto)', fontSize: 13 }}>{usuario.nombre}</div>
-          <div style={{ color: 'var(--texto-suave)', marginTop: 2 }}>{ETIQUETA_ROL[usuario.rol] ?? usuario.rol}</div>
+      {/* ── Backdrop ── */}
+      {sidebarAbierto && (
+        <div className="sidebar-backdrop" onClick={() => setSidebarAbierto(false)} />
+      )}
+
+      {/* ── Sidebar panel ── */}
+      <aside className={`sidebar-panel${sidebarAbierto ? ' sidebar-panel--abierto' : ''}`}>
+
+        <div className="sidebar-top">
+          <div className="sidebar-logo">
+            <span className="sidebar-logo-icon">🧱</span>
+            <div>
+              <div className="sidebar-logo-nombre">Corralón</div>
+              <div className="sidebar-logo-sub">Virgen de Punta Corral</div>
+            </div>
+          </div>
+          <button className="sidebar-cerrar" onClick={() => setSidebarAbierto(false)} aria-label="Cerrar menú">
+            <X size={20} />
+          </button>
         </div>
-        <div className="sidebar-divider" />
 
-        <nav>
-          {secciones.map(s => (
+        <nav className="sidebar-nav">
+          {/* Dashboard (solo admin) */}
+          {permitidosSet.has('dashboard') && (
             <button
-              key={s.id}
-              className={`nav-item ${seccionVisible === s.id ? 'activo' : ''}`}
-              onClick={() => setSeccion(s.id)}
+              className={`sidebar-nav-item${seccionVisible === 'dashboard' ? ' activo' : ''}`}
+              onClick={() => navegar('dashboard')}
             >
-              <span className="nav-icono">{s.icono}</span>
-              <span className="nav-label">{s.label}</span>
+              <LayoutDashboard size={18} strokeWidth={2} />
+              <span>Dashboard</span>
             </button>
-          ))}
+          )}
+
+          {/* Grupos temáticos */}
+          {NAV_GRUPOS.map(({ grupo, ids }) => {
+            const items = ids.filter(id => permitidosSet.has(id)).map(id => MAPA_SECCIONES[id]);
+            if (!items.length) return null;
+            return (
+              <div key={grupo} className="sidebar-grupo">
+                <span className="sidebar-grupo-label">{grupo}</span>
+                {items.map(s => (
+                  <button
+                    key={s.id}
+                    className={`sidebar-nav-item${seccionVisible === s.id ? ' activo' : ''}`}
+                    onClick={() => navegar(s.id)}
+                  >
+                    <s.Icon size={18} strokeWidth={2} />
+                    <span>{s.label}</span>
+                  </button>
+                ))}
+              </div>
+            );
+          })}
         </nav>
 
-        <div style={{ marginTop: 'auto' }}>
-          <div className="sidebar-divider" />
-          <button
-            className="nav-item"
-            onClick={handleLogout}
-            style={{ width: '100%', color: '#ef4444' }}
-          >
-            <span className="nav-icono">🚪</span>
-            <span className="nav-label">Cerrar sesión</span>
+        <div className="sidebar-footer">
+          <div className="sidebar-footer-user">
+            <div className="avatar">{iniciales(usuario.nombre)}</div>
+            <div className="sidebar-footer-info">
+              <span className="sidebar-footer-nombre">{usuario.nombre}</span>
+              <span className="sidebar-footer-rol">{ETIQUETA_ROL[usuario.rol] ?? usuario.rol}</span>
+            </div>
+          </div>
+          <button className="sidebar-logout" onClick={handleLogout} aria-label="Cerrar sesión">
+            <LogOut size={18} strokeWidth={2} />
           </button>
-          <div className="sidebar-footer"><span>Sistema de Gestión v1.0</span></div>
         </div>
       </aside>
-      <main className="contenido">{renderContenido(seccionVisible)}</main>
+
+      {/* ── Contenido principal ── */}
+      <main className="app-contenido">
+        {renderContenido(seccionVisible)}
+      </main>
     </div>
   );
 }
