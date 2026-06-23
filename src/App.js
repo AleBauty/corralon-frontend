@@ -33,12 +33,14 @@ const SECCIONES_POR_ROL = {
   admin:            ['productos', 'clientes', 'proveedores', 'ventas', 'presupuestos', 'pedidos', 'empleados', 'asistencias', 'vehiculos', 'cuentaCorriente', 'reportes', 'egresos'],
   vendedor:         ['ventas', 'clientes', 'asistencias', 'presupuestos', 'cuentaCorriente'],
   gerente_finanzas: ['ventas', 'reportes', 'cuentaCorriente', 'egresos', 'vehiculos'],
+  logistica:        ['vehiculos', 'asistencias'],
 };
 
 const ETIQUETA_ROL = {
   admin:            'Administrador',
   vendedor:         'Vendedor',
   gerente_finanzas: 'Gerente Finanzas',
+  logistica:        'Encargado Logística',
 };
 
 function seccionesParaRol(rol) {
