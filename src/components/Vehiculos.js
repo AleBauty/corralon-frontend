@@ -1,7 +1,107 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import Modal from './Modal';
 
-const API = process.env.REACT_APP_API_URL || 'http://localhost:3000';
+const API     = process.env.REACT_APP_API_URL || 'http://localhost:3000';
+const ORS_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImFlMWU5NDE4ZWM0YjRjOWZiOWNiN2RlMzQ0ZjgzNWNhIiwiaCI6Im11cm11cjY0In0=';
+const ORIGEN  = [-65.2667, -24.3833]; // [lng, lat] El Carmen, Jujuy
+
+function MapaRuta({ direccion }) {
+  const mapRef     = useRef(null);
+  const mapInst    = useRef(null);
+  const [info,     setInfo]     = useState(null);
+  const [cargando, setCargando] = useState(true);
+  const [error,    setError]    = useState('');
+
+  useEffect(() => {
+    const L = window.L;
+    if (!L || !mapRef.current) return;
+
+    if (mapInst.current) { mapInst.current.remove(); mapInst.current = null; }
+
+    const map = L.map(mapRef.current).setView([ORIGEN[1], ORIGEN[0]], 10);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
+    }).addTo(map);
+    mapInst.current = map;
+
+    L.marker([ORIGEN[1], ORIGEN[0]]).addTo(map)
+      .bindPopup('<b>Corralón — El Carmen, Jujuy</b>').openPopup();
+
+    const calcular = async () => {
+      try {
+        const geoRes = await fetch(
+          `https://api.openrouteservice.org/geocode/search?api_key=${ORS_KEY}` +
+          `&text=${encodeURIComponent(direccion + ', Jujuy, Argentina')}` +
+          `&boundary.country=AR&size=1`
+        );
+        const geoData = await geoRes.json();
+
+        if (!geoData.features?.length) {
+          setError('No se pudo geocodificar el domicilio. Verificá la dirección.');
+          setCargando(false);
+          return;
+        }
+
+        const [dLng, dLat] = geoData.features[0].geometry.coordinates;
+
+        L.marker([dLat, dLng]).addTo(map)
+          .bindPopup(`<b>Destino</b><br>${direccion}`);
+
+        const routeRes = await fetch(
+          'https://api.openrouteservice.org/v2/directions/driving-car/geojson',
+          {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': ORS_KEY },
+            body:    JSON.stringify({ coordinates: [ORIGEN, [dLng, dLat]] }),
+          }
+        );
+        const routeData = await routeRes.json();
+
+        if (routeData.features?.length) {
+          const summary = routeData.features[0].properties.summary;
+          setInfo({
+            distKm: (summary.distance / 1000).toFixed(1),
+            durMin: Math.round(summary.duration / 60),
+          });
+          const layer = L.geoJSON(routeData.features[0], {
+            style: { color: '#2563eb', weight: 4, opacity: 0.8 },
+          }).addTo(map);
+          map.fitBounds(layer.getBounds(), { padding: [24, 24] });
+        } else {
+          setError('No se encontró ruta para esta dirección.');
+        }
+      } catch {
+        setError('Error al calcular la ruta. Verificá la conexión.');
+      } finally {
+        setCargando(false);
+      }
+    };
+
+    calcular();
+
+    return () => {
+      if (mapInst.current) { mapInst.current.remove(); mapInst.current = null; }
+    };
+  }, [direccion]);
+
+  return (
+    <div>
+      <div ref={mapRef} style={{ height: 340, borderRadius: 8, overflow: 'hidden', marginBottom: 12 }} />
+      {cargando && <p style={{ fontSize: 13, color: 'var(--texto-suave)', margin: 0 }}>Calculando ruta...</p>}
+      {error   && <p style={{ fontSize: 13, color: '#dc2626', margin: 0 }}>{error}</p>}
+      {info    && (
+        <div style={{ display: 'flex', gap: 20 }}>
+          <div style={{ background: '#eff6ff', borderRadius: 8, padding: '8px 14px', fontSize: 13 }}>
+            📍 Distancia: <strong style={{ color: '#1d4ed8' }}>{info.distKm} km</strong>
+          </div>
+          <div style={{ background: '#f0fdf4', borderRadius: 8, padding: '8px 14px', fontSize: 13 }}>
+            🕐 Tiempo estimado: <strong style={{ color: '#15803d' }}>{info.durMin} min</strong>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const ESTADOS_VEH = ['Disponible', 'En reparto', 'En mantenimiento'];
 
@@ -50,6 +150,8 @@ export default function Vehiculos() {
   const [cargandoDetalle, setCargandoDetalle]       = useState(false);
   const [marcandoEntregada, setMarcandoEntregada]   = useState(false);
   const [errDetalle, setErrDetalle]                 = useState(null);
+
+  const [ventaMapa, setVentaMapa]   = useState(null);
 
   // ── Mantenimiento state ────────────────────────────────────────
   const [vehSelMant, setVehSelMant]         = useState('');
@@ -300,6 +402,11 @@ export default function Vehiculos() {
                             <button className="btn-editar"
                               style={{ background: '#f0f4ff', color: '#3730a3', borderColor: 'rgba(55,48,163,0.25)' }}
                               onClick={() => verDetalle(v)}>🔍 Detalle</button>
+                            {v.direccion_entrega && (
+                              <button className="btn-editar"
+                                style={{ background: '#f0fdf4', color: '#15803d', borderColor: 'rgba(21,128,61,0.25)' }}
+                                onClick={() => setVentaMapa(v)}>🗺 Ver ruta</button>
+                            )}
                             {asignando === v.id ? (
                               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                                 <select value={vehAsignar} onChange={e => setVehAsignar(e.target.value)}
@@ -501,6 +608,20 @@ export default function Vehiculos() {
             <button className="btn btn-primary" onClick={guardarMant} disabled={guardandoMant}>
               {guardandoMant ? 'Guardando...' : 'Guardar'}
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Modal mapa de ruta ────────────────────────────────────── */}
+      {ventaMapa && (
+        <Modal
+          titulo={`Ruta — ${ventaMapa.cliente ?? 'Consumidor final'} · ${ventaMapa.direccion_entrega}`}
+          onCerrar={() => setVentaMapa(null)}
+          ancho={700}
+        >
+          <MapaRuta key={ventaMapa.id} direccion={ventaMapa.direccion_entrega} />
+          <div className="modal-footer">
+            <button className="btn btn-secundario" onClick={() => setVentaMapa(null)}>Cerrar</button>
           </div>
         </Modal>
       )}

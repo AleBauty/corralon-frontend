@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import Login          from './components/Login';
+import Dashboard      from './components/Dashboard';
 import Productos      from './components/Productos';
 import Clientes       from './components/Clientes';
 import Proveedores    from './components/Proveedores';
@@ -15,6 +16,7 @@ import Egresos        from './components/Egresos';
 import './App.css';
 
 const TODAS_SECCIONES = [
+  { id: 'dashboard',       label: 'Dashboard',      icono: '🏠' },
   { id: 'productos',       label: 'Productos',      icono: '🧱' },
   { id: 'clientes',        label: 'Clientes',       icono: '👤' },
   { id: 'proveedores',     label: 'Proveedores',    icono: '🚛' },
@@ -30,7 +32,7 @@ const TODAS_SECCIONES = [
 ];
 
 const SECCIONES_POR_ROL = {
-  admin:            ['productos', 'clientes', 'proveedores', 'ventas', 'presupuestos', 'pedidos', 'empleados', 'asistencias', 'vehiculos', 'cuentaCorriente', 'reportes', 'egresos'],
+  admin:            ['dashboard', 'productos', 'clientes', 'proveedores', 'ventas', 'presupuestos', 'pedidos', 'empleados', 'asistencias', 'vehiculos', 'cuentaCorriente', 'reportes', 'egresos'],
   vendedor:         ['ventas', 'clientes', 'asistencias', 'presupuestos', 'cuentaCorriente'],
   gerente_finanzas: ['ventas', 'reportes', 'cuentaCorriente', 'egresos', 'vehiculos'],
   logistica:        ['vehiculos', 'asistencias'],
@@ -50,6 +52,7 @@ function seccionesParaRol(rol) {
 
 function renderContenido(seccion) {
   switch (seccion) {
+    case 'dashboard':       return <Dashboard />;
     case 'productos':       return <Productos />;
     case 'clientes':        return <Clientes />;
     case 'proveedores':     return <Proveedores />;
