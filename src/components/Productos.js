@@ -4,19 +4,18 @@ import Tooltip from './Tooltip';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:3000';
 
+const UNIDADES_MEDIDA  = ['bolsas', 'm²', 'm³', 'kg', 'unidades', 'litros', 'metros'];
+const UNIDADES_ENTERAS = ['bolsas', 'unidades'];
+
 const FORM_VACIO = {
   codigo: '', nombre: '', descripcion: '', categoria_id: '',
   marca: '', stock_actual: '0', stock_minimo: '0',
   proveedor_principal: '', precio_costo: '', porcentaje_ganancia: '',
+  unidad_medida: 'unidades',
 };
 
 function validar(form, esEdicion, ingresoStock) {
   const e = {};
-  if (!esEdicion) {
-    if (!form.codigo.trim())         e.codigo = 'El código es obligatorio';
-    else if (/\s/.test(form.codigo)) e.codigo = 'El código no puede contener espacios';
-    else if (form.codigo.length > 20) e.codigo = 'Máximo 20 caracteres';
-  }
   if (!form.nombre.trim())               e.nombre = 'El nombre es obligatorio';
   else if (form.nombre.trim().length < 3) e.nombre = 'Mínimo 3 caracteres';
   if (form.precio_costo === '')           e.precio_costo = 'El precio de costo es obligatorio';
@@ -50,6 +49,7 @@ function badgeStock(p) {
 export default function Productos() {
   const [productos, setProductos]         = useState([]);
   const [proveedores, setProveedores]     = useState([]);
+  const [categorias, setCategorias]       = useState([]);
   const [cargando, setCargando]           = useState(true);
   const [error, setError]                 = useState(null);
   const [modalAbierto, setModalAbierto]   = useState(false);
@@ -59,6 +59,7 @@ export default function Productos() {
   const [ingresoStock, setIngresoStock]   = useState('');
   const [guardando, setGuardando]         = useState(false);
   const [errorGuardado, setErrorGuardado] = useState(null);
+  const [generandoCodigo, setGenerandoCodigo] = useState(false);
 
   const errores    = useMemo(() => validar(form, esEdicion, ingresoStock), [form, esEdicion, ingresoStock]);
   const hayErrores = Object.values(errores).some(Boolean);
@@ -81,11 +82,24 @@ export default function Productos() {
   useEffect(() => {
     cargarProductos();
     fetch(`${API}/api/proveedores`).then(r => r.json()).then(setProveedores).catch(() => {});
+    fetch(`${API}/api/productos/categorias`).then(r => r.json()).then(setCategorias).catch(() => {});
   }, [cargarProductos]);
 
-  const abrirCrear = () => {
-    setForm(FORM_VACIO); setEsEdicion(false); setIngresoStock(''); setErrorGuardado(null); setModalAbierto(true);
+  const obtenerSiguienteCodigo = async () => {
+    setGenerandoCodigo(true);
+    try {
+      const data = await fetch(`${API}/api/productos/siguiente-codigo`).then(r => r.json());
+      return data.codigo;
+    } catch { return ''; }
+    finally { setGenerandoCodigo(false); }
   };
+
+  const abrirCrear = async () => {
+    const codigo = await obtenerSiguienteCodigo();
+    setForm({ ...FORM_VACIO, codigo });
+    setEsEdicion(false); setIngresoStock(''); setErrorGuardado(null); setModalAbierto(true);
+  };
+
   const abrirEditar = p => {
     setForm({
       codigo: p.codigo, nombre: p.nombre, descripcion: p.descripcion ?? '',
@@ -95,11 +109,13 @@ export default function Productos() {
       proveedor_principal: p.proveedor_principal ?? '',
       precio_costo: String(parseFloat(p.precio_costo)),
       porcentaje_ganancia: String(parseFloat(p.porcentaje_ganancia)),
+      unidad_medida: p.unidad_medida ?? 'unidades',
     });
     setStockActualBase(parseFloat(p.stock_actual));
     setIngresoStock('');
     setEsEdicion(true); setErrorGuardado(null); setModalAbierto(true);
   };
+
   const cerrar  = () => { setModalAbierto(false); setErrorGuardado(null); };
   const cambiar = (campo, valor) => setForm(f => ({ ...f, [campo]: valor }));
 
@@ -115,6 +131,7 @@ export default function Productos() {
       proveedor_principal: form.proveedor_principal || null,
       precio_costo:        parseFloat(form.precio_costo),
       porcentaje_ganancia: parseFloat(form.porcentaje_ganancia),
+      unidad_medida:       form.unidad_medida,
     };
     if (!esEdicion) {
       body.codigo       = form.codigo.trim().toUpperCase();
@@ -125,9 +142,15 @@ export default function Productos() {
     try {
       const res  = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      if (!res.ok) {
+        // Si código duplicado en crear, regenerar y mostrar error
+        if (!esEdicion && res.status === 409) {
+          const nuevo = await obtenerSiguienteCodigo();
+          setForm(f => ({ ...f, codigo: nuevo }));
+        }
+        throw new Error(data.error ?? `Error ${res.status}`);
+      }
 
-      // Si hay ingreso de stock en edición, aplicarlo
       if (esEdicion && ingresoStock && parseFloat(ingresoStock) > 0) {
         const res2 = await fetch(`${API}/api/productos/${form.codigo}/ingreso-stock`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -152,13 +175,15 @@ export default function Productos() {
     <div>
       <div className="seccion-header">
         <h2>Productos <span className="total-registros">{productos.length}</span></h2>
-        <button className="btn-nuevo" onClick={abrirCrear}>+ Nuevo producto</button>
+        <button className="btn-nuevo" onClick={abrirCrear} disabled={generandoCodigo}>
+          {generandoCodigo ? 'Generando...' : '+ Nuevo producto'}
+        </button>
       </div>
       {productos.length === 0 ? <p className="estado-carga">No hay productos cargados.</p> : (
         <div className="tabla-wrapper">
           <table>
             <thead><tr>
-              <th>Código</th><th>Nombre</th><th>Categoría</th><th>Marca</th>
+              <th>Código</th><th>Nombre</th><th>Categoría</th><th>Unidad</th><th>Marca</th>
               <th>Stock actual / mínimo</th><th>Precio costo</th><th>Precio venta</th><th>Estado</th><th></th>
             </tr></thead>
             <tbody>
@@ -167,6 +192,7 @@ export default function Productos() {
                   <td><code>{p.codigo}</code></td>
                   <td>{p.nombre}</td>
                   <td>{p.categoria_nombre ?? p.categoria ?? '—'}</td>
+                  <td style={{ fontSize: 12, color: 'var(--texto-suave)' }}>{p.unidad_medida ?? 'unidades'}</td>
                   <td>{p.marca ?? '—'}</td>
                   <td style={{ textAlign: 'right' }}>
                     {parseFloat(p.stock_actual).toLocaleString('es-AR')}
@@ -186,33 +212,54 @@ export default function Productos() {
       {modalAbierto && (
         <Modal titulo={esEdicion ? `Editar — ${form.codigo}` : 'Nuevo producto'} onCerrar={cerrar} ancho={640}>
           <div className="form-grid">
+
+            {/* Código — solo lectura en crear, no editable en editar */}
             {!esEdicion && (
               <div className="form-group">
-                <label>Código *</label>
-                <input value={form.codigo} onChange={e => cambiar('codigo', e.target.value)}
-                  className={errores.codigo ? 'error-campo' : ''} placeholder="Ej: CEM-50" autoFocus />
-                {errores.codigo && <span className="error-msg">{errores.codigo}</span>}
+                <label>Código (auto-generado)</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <code style={{
+                    display: 'inline-block', background: 'var(--fondo)', border: '1.5px solid var(--borde)',
+                    borderRadius: 'var(--radio-sm)', padding: '8px 14px', fontWeight: 700, fontSize: 15,
+                    letterSpacing: 1.5, color: 'var(--naranja-oscuro)', minWidth: 100,
+                  }}>
+                    {generandoCodigo ? '...' : form.codigo}
+                  </code>
+                  <span style={{ fontSize: 12, color: 'var(--texto-suave)' }}>Se asigna automáticamente</span>
+                </div>
               </div>
             )}
+
             <div className={`form-group ${!esEdicion ? '' : 'span-2'}`}>
               <label>Nombre *</label>
               <input value={form.nombre} onChange={e => cambiar('nombre', e.target.value)}
                 className={errores.nombre ? 'error-campo' : ''} placeholder="Nombre del producto" autoFocus={esEdicion} />
               {errores.nombre && <span className="error-msg">{errores.nombre}</span>}
             </div>
+
             <div className="form-group span-2">
               <label>Descripción</label>
               <textarea value={form.descripcion} onChange={e => cambiar('descripcion', e.target.value)} rows={2} placeholder="Descripción opcional" />
             </div>
+
             <div className="form-group">
               <label>Marca</label>
               <input value={form.marca} onChange={e => cambiar('marca', e.target.value)} placeholder="Ej: Loma Negra" />
             </div>
+
             <div className="form-group">
-              <label>ID Categoría</label>
-              <input type="number" value={form.categoria_id} onChange={e => cambiar('categoria_id', e.target.value)}
-                className={errores.categoria_id ? 'error-campo' : ''} placeholder="Número de categoría" min="1" />
-              {errores.categoria_id && <span className="error-msg">{errores.categoria_id}</span>}
+              <label>Categoría</label>
+              <select value={form.categoria_id} onChange={e => cambiar('categoria_id', e.target.value)}>
+                <option value="">— Sin categoría —</option>
+                {categorias.map(c => <option key={c.id} value={String(c.id)}>{c.nombre}</option>)}
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label>Unidad de medida</label>
+              <select value={form.unidad_medida} onChange={e => cambiar('unidad_medida', e.target.value)}>
+                {UNIDADES_MEDIDA.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
             </div>
 
             {/* Stock: diferente en crear vs editar */}
@@ -220,18 +267,22 @@ export default function Productos() {
               <div className="form-group">
                 <label>Stock inicial</label>
                 <input type="number" value={form.stock_actual} onChange={e => cambiar('stock_actual', e.target.value)}
-                  className={errores.stock_actual ? 'error-campo' : ''} min="0" step="0.01" placeholder="0" />
+                  className={errores.stock_actual ? 'error-campo' : ''}
+                  min="0"
+                  step={UNIDADES_ENTERAS.includes(form.unidad_medida) ? '1' : '0.01'}
+                  placeholder="0" />
                 {errores.stock_actual && <span className="error-msg">{errores.stock_actual}</span>}
               </div>
             ) : (
               <div className="form-group">
                 <label>Ingreso de stock</label>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <input type="number" min="0.01" step="0.01" value={ingresoStock}
-                    onChange={e => setIngresoStock(e.target.value)}
-                    className={errores.ingresoStock ? 'error-campo' : ''}
-                    placeholder="Unidades a ingresar" style={{ flex: 1 }} />
-                </div>
+                <input type="number"
+                  min={UNIDADES_ENTERAS.includes(form.unidad_medida) ? '1' : '0.01'}
+                  step={UNIDADES_ENTERAS.includes(form.unidad_medida) ? '1' : '0.01'}
+                  value={ingresoStock}
+                  onChange={e => setIngresoStock(e.target.value)}
+                  className={errores.ingresoStock ? 'error-campo' : ''}
+                  placeholder="Unidades a ingresar" />
                 <p style={{ fontSize: 12, marginTop: 5, color: 'var(--texto-suave)' }}>
                   Stock actual: <strong style={{ color: 'var(--texto)' }}>{stockActualBase.toLocaleString('es-AR')}</strong>
                   {ingresoNum > 0 && (
@@ -248,15 +299,19 @@ export default function Productos() {
                 <Tooltip texto="Cantidad mínima antes de reponer el producto." />
               </label>
               <input type="number" value={form.stock_minimo} onChange={e => cambiar('stock_minimo', e.target.value)}
-                className={errores.stock_minimo ? 'error-campo' : ''} min="0" step="0.01" />
+                className={errores.stock_minimo ? 'error-campo' : ''}
+                min="0"
+                step={UNIDADES_ENTERAS.includes(form.unidad_medida) ? '1' : '0.01'} />
               {errores.stock_minimo && <span className="error-msg">{errores.stock_minimo}</span>}
             </div>
+
             <div className="form-group">
               <label>Precio de costo *</label>
               <input type="number" value={form.precio_costo} onChange={e => cambiar('precio_costo', e.target.value)}
                 className={errores.precio_costo ? 'error-campo' : ''} placeholder="0.00" min="0.01" step="0.01" />
               {errores.precio_costo && <span className="error-msg">{errores.precio_costo}</span>}
             </div>
+
             <div className="form-group">
               <label>
                 % Ganancia *
@@ -271,6 +326,7 @@ export default function Productos() {
                 </span>
               )}
             </div>
+
             <div className="form-group span-2">
               <label>Proveedor principal</label>
               <select value={form.proveedor_principal} onChange={e => cambiar('proveedor_principal', e.target.value)}>
@@ -279,6 +335,7 @@ export default function Productos() {
               </select>
             </div>
           </div>
+
           {errorGuardado && <p className="error-msg" style={{ marginTop: 14 }}>Error al guardar: {errorGuardado}</p>}
           <div className="modal-footer">
             <button className="btn btn-secundario" onClick={cerrar} type="button">Cancelar</button>

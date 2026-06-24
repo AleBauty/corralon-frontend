@@ -4,9 +4,10 @@ import Modal from './Modal';
 const API = process.env.REACT_APP_API_URL || 'http://localhost:3000';
 
 const ESTADO_PEDIDO = {
-  Pendiente: 'badge-pendiente',
-  Recibido:  'badge-recibido',
-  Cancelado: 'badge-cancelado',
+  Pendiente:               'badge-pendiente',
+  Recibido:                'badge-recibido',
+  'Parcialmente entregado':'badge-vigente',
+  Cancelado:               'badge-cancelado',
 };
 
 function fmt(n) {
@@ -24,7 +25,13 @@ export default function Pedidos() {
   const [error, setError]         = useState(null);
   const [expandido, setExpandido] = useState(null);
   const [detalle, setDetalle]     = useState({});
-  const [recibiendo, setRecibiendo] = useState(null);
+
+  // ─── Modal recibir ───
+  const [modalRecibir, setModalRecibir]           = useState(null);  // pedido obj
+  const [itemsRecibir, setItemsRecibir]           = useState([]);    // [{ ...item, cantidad_recibida }]
+  const [cargandoItems, setCargandoItems]         = useState(false);
+  const [confirmandoRecibir, setConfirmandoRecibir] = useState(false);
+  const [errRecibir, setErrRecibir]               = useState(null);
 
   // ─── Modal nuevo pedido ───
   const [modalPedido, setModalPedido]       = useState(false);
@@ -58,6 +65,11 @@ export default function Pedidos() {
     return () => document.removeEventListener('mousedown', fn);
   }, []);
 
+  const proveedoresActivos = useMemo(
+    () => proveedores.filter(p => p.estado === 'Activo' || p.estado == null),
+    [proveedores]
+  );
+
   const productosFiltrados = useMemo(() => {
     const q = busquedaProd.trim().toLowerCase();
     if (!q || prodSel) return [];
@@ -87,7 +99,7 @@ export default function Pedidos() {
   const agregarItem = () => {
     const cant  = parseFloat(cantInput);
     const precio = parseFloat(precioInput);
-    if (!cantInput || isNaN(cant) || cant <= 0)   { setErrItem('La cantidad debe ser mayor a 0'); return; }
+    if (!cantInput || isNaN(cant) || cant <= 0)     { setErrItem('La cantidad debe ser mayor a 0'); return; }
     if (!precioInput || isNaN(precio) || precio <= 0) { setErrItem('El precio debe ser mayor a 0'); return; }
     const subtotal = cant * precio;
     const yaExiste = items.find(i => i.producto_codigo === prodSel.codigo);
@@ -123,16 +135,44 @@ export default function Pedidos() {
     finally      { setGuardando(false); }
   };
 
-  const recibirPedido = async (id) => {
-    if (!window.confirm('¿Confirmar recepción del pedido?\nSe incrementará el stock de todos los productos incluidos.')) return;
-    setRecibiendo(id);
+  // ─── Modal recibir pedido ───
+  const abrirModalRecibir = async (pedido) => {
+    setModalRecibir(pedido);
+    setErrRecibir(null);
+    setCargandoItems(true);
     try {
-      const res  = await fetch(`${API}/api/pedidos/${id}/recibir`, { method: 'PUT' });
+      const data = await fetch(`${API}/api/pedidos/${pedido.id}`).then(r => r.json());
+      const its = (data.items ?? []).map(item => ({
+        ...item,
+        cantidad_recibida: String(parseFloat(item.cantidad)),
+      }));
+      setItemsRecibir(its);
+    } catch { setItemsRecibir([]); setErrRecibir('No se pudieron cargar los items del pedido.'); }
+    finally { setCargandoItems(false); }
+  };
+
+  const actualizarCantRecibida = (id, valor) => {
+    setItemsRecibir(prev => prev.map(it => it.id === id ? { ...it, cantidad_recibida: valor } : it));
+  };
+
+  const confirmarRecepcion = async () => {
+    if (!modalRecibir) return;
+    setConfirmandoRecibir(true); setErrRecibir(null);
+    try {
+      const payload = itemsRecibir.map(it => ({
+        id:                 it.id,
+        cantidad_recibida:  Math.max(0, parseFloat(it.cantidad_recibida) || 0),
+      }));
+      const res  = await fetch(`${API}/api/pedidos/${modalRecibir.id}/recibir`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: payload }),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      setModalRecibir(null); setItemsRecibir([]);
       cargarPedidos();
-    } catch (err) { alert(`Error: ${err.message}`); }
-    finally      { setRecibiendo(null); }
+    } catch (err) { setErrRecibir(err.message); }
+    finally      { setConfirmandoRecibir(false); }
   };
 
   const toggleDetalle = async id => {
@@ -174,10 +214,9 @@ export default function Pedidos() {
                       {p.estado === 'Pendiente' && (
                         <button
                           className="btn-editar" style={{background:'#e9f7ef',color:'#27ae60',borderColor:'rgba(39,174,96,0.3)'}}
-                          onClick={() => recibirPedido(p.id)}
-                          disabled={recibiendo === p.id}
+                          onClick={() => abrirModalRecibir(p)}
                         >
-                          {recibiendo === p.id ? '...' : '✓ Recibir'}
+                          ✓ Recibir
                         </button>
                       )}
                     </td>
@@ -205,15 +244,16 @@ export default function Pedidos() {
         </div>
       )}
 
+      {/* ─── Modal nuevo pedido ─── */}
       {modalPedido && (
         <Modal titulo="Nuevo pedido a proveedor" onCerrar={cerrarModal} ancho={700}>
 
           <p className="form-section-titulo">Proveedor</p>
           <div className="form-group">
-            <label>Seleccionar proveedor</label>
+            <label>Seleccionar proveedor (solo activos)</label>
             <select value={proveedorCuit} onChange={e => setProveedorCuit(e.target.value)}>
               <option value="">— Sin proveedor específico —</option>
-              {proveedores.map(p => <option key={p.cuit} value={p.cuit}>{p.nombre} ({p.cuit})</option>)}
+              {proveedoresActivos.map(p => <option key={p.cuit} value={p.cuit}>{p.nombre} ({p.cuit})</option>)}
             </select>
           </div>
 
@@ -293,6 +333,82 @@ export default function Pedidos() {
             <button className="btn btn-secundario" onClick={cerrarModal} type="button">Cancelar</button>
             <button className="btn btn-primary" onClick={guardarPedido} disabled={!items.length || guardando} type="button">
               {guardando ? 'Guardando...' : `Crear pedido${items.length ? ` — $${fmt(totalPedido)}` : ''}`}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ─── Modal recibir pedido ─── */}
+      {modalRecibir && (
+        <Modal titulo={`Recibir pedido #${modalRecibir.id}`} onCerrar={() => { setModalRecibir(null); setItemsRecibir([]); }} ancho={680}>
+          <p style={{ fontSize: 14, color: 'var(--texto-suave)', marginBottom: 18 }}>
+            Ingresá la cantidad realmente recibida de cada producto. El stock se actualiza solo con lo recibido efectivamente.
+            Si recibís menos que lo pedido, el pedido quedará como <strong>Parcialmente entregado</strong>.
+          </p>
+
+          {cargandoItems ? (
+            <p className="estado-carga">Cargando items...</p>
+          ) : itemsRecibir.length === 0 ? (
+            <p className="estado-carga">Sin items.</p>
+          ) : (
+            <div className="tabla-wrapper" style={{ marginBottom: 20 }}>
+              <table>
+                <thead><tr>
+                  <th>Producto</th>
+                  <th style={{ textAlign: 'right' }}>Cantidad pedida</th>
+                  <th style={{ textAlign: 'right', minWidth: 160 }}>Cantidad recibida</th>
+                  <th>Estado</th>
+                </tr></thead>
+                <tbody>
+                  {itemsRecibir.map(it => {
+                    const pedida   = parseFloat(it.cantidad);
+                    const recibida = parseFloat(it.cantidad_recibida) || 0;
+                    const estadoItem = recibida <= 0 ? 'No recibido' : recibida < pedida ? 'Parcial' : 'Completo';
+                    const colorEstado = estadoItem === 'Completo' ? '#166534' : estadoItem === 'Parcial' ? '#854d0e' : '#c0392b';
+                    const bgEstado    = estadoItem === 'Completo' ? '#dcfce7'  : estadoItem === 'Parcial' ? '#fef9c3'  : '#fff0f0';
+                    return (
+                      <tr key={it.id}>
+                        <td style={{ fontWeight: 500 }}>{it.producto ?? it.producto_codigo}</td>
+                        <td style={{ textAlign: 'right' }}>{pedida.toLocaleString('es-AR')}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          <input
+                            type="number"
+                            min="0"
+                            max={pedida}
+                            step="0.01"
+                            value={it.cantidad_recibida}
+                            onChange={e => actualizarCantRecibida(it.id, e.target.value)}
+                            style={{
+                              width: 110, textAlign: 'right',
+                              border: '1.5px solid var(--borde)', borderRadius: 6,
+                              padding: '4px 8px', fontSize: 14, fontWeight: 600,
+                              background: recibida < pedida ? '#fffbeb' : 'var(--blanco)',
+                            }}
+                          />
+                        </td>
+                        <td>
+                          <span className="badge" style={{ background: bgEstado, color: colorEstado, border: `1px solid ${colorEstado}22` }}>
+                            {estadoItem}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {errRecibir && <p className="error-msg" style={{ marginBottom: 12 }}>{errRecibir}</p>}
+          <div className="modal-footer">
+            <button className="btn btn-secundario" type="button"
+              onClick={() => { setModalRecibir(null); setItemsRecibir([]); }}>
+              Cancelar
+            </button>
+            <button className="btn btn-primary" type="button"
+              onClick={confirmarRecepcion}
+              disabled={confirmandoRecibir || cargandoItems || itemsRecibir.length === 0}>
+              {confirmandoRecibir ? 'Registrando...' : '✓ Confirmar recepción'}
             </button>
           </div>
         </Modal>

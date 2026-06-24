@@ -4,8 +4,10 @@ import Comprobante from './Comprobante';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:3000';
 
-const FORMAS_PAGO    = ['Efectivo', 'Tarjeta', 'Transferencia', 'Cuenta corriente'];
-const FORMAS_ENTREGA = ['Depósito', 'Domicilio'];
+const FORMAS_PAGO      = ['Efectivo', 'Tarjeta', 'Transferencia', 'Cuenta corriente'];
+const FORMAS_ENTREGA   = ['Depósito', 'Domicilio'];
+const TIPOS_CLIENTE    = ['Normal', 'Cuenta corriente', 'Empresa'];
+const UNIDADES_ENTERAS = ['bolsas', 'unidades'];
 
 const ESTADO_VENTA = {
   Activa:    { background: '#e6f9f0', color: '#1a8a4a' },
@@ -17,6 +19,8 @@ function fmt(n)        { return parseFloat(n ?? 0).toLocaleString('es-AR', { min
 function formatFecha(iso) {
   return new Date(iso).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
+
+const FORM_CLI_VACIO = { nombre_apellido: '', dni: '', telefono: '', tipo: 'Normal' };
 
 export default function Ventas() {
   // ─── Lista ───
@@ -46,15 +50,21 @@ export default function Ventas() {
   const [errorGuardado, setErrorGuardado]   = useState(null);
   const searchRef = useRef(null);
 
-  // ─── Pago (dual) ───
+  // ─── Pago ───
   const [formaPago1, setFormaPago1]       = useState('Efectivo');
-  const [usarDosFormas, setUsarDosFormas] = useState(false);
-  const [formaPago2, setFormaPago2]       = useState('Efectivo');
   const [montoPago1, setMontoPago1]       = useState('');
+  const [usarDosFormas, setUsarDosFormas] = useState(false);
+  const [formaPago2, setFormaPago2]       = useState('Transferencia');
   const [montoPago2, setMontoPago2]       = useState('');
 
-  // ─── Info CC en tiempo real ───
-  const [infoCC, setInfoCC]   = useState(null);
+  // ─── Info CC ───
+  const [infoCC, setInfoCC] = useState(null);
+
+  // ─── Modal nuevo cliente ───
+  const [modalNuevoCli, setModalNuevoCli]     = useState(false);
+  const [formCli, setFormCli]                 = useState(FORM_CLI_VACIO);
+  const [guardandoCli, setGuardandoCli]       = useState(false);
+  const [errCli, setErrCli]                   = useState(null);
 
   const cargarVentas = useCallback(() => {
     setCargando(true);
@@ -72,24 +82,33 @@ export default function Ventas() {
     return () => document.removeEventListener('mousedown', fn);
   }, []);
 
-  // Auto-completar dirección cuando cambia el cliente
+  // Auto-completar dirección
   useEffect(() => {
     if (!dniCliente) { setDireccionEntrega(''); return; }
     const cli = clientes.find(c => c.dni === dniCliente);
     if (cli?.domicilio) setDireccionEntrega(cli.domicilio);
   }, [dniCliente, clientes]);
 
-  // Fetch saldo CC cuando se selecciona cliente + forma CC
+  // Fetch saldo CC
   useEffect(() => {
     const esCC = formaPago1 === 'Cuenta corriente' || (usarDosFormas && formaPago2 === 'Cuenta corriente');
     if (!dniCliente || !esCC) { setInfoCC(null); return; }
-    const cli   = clientes.find(c => c.dni === dniCliente);
+    const cli = clientes.find(c => c.dni === dniCliente);
     const limite = parseFloat(cli?.limite_credito ?? 50000);
     fetch(`${API}/api/cuenta-corriente/${dniCliente}/movimientos`)
       .then(r => r.json())
       .then(data => setInfoCC({ saldo: parseFloat(data.saldo ?? 0), limite }))
       .catch(() => setInfoCC(null));
   }, [dniCliente, formaPago1, formaPago2, usarDosFormas, clientes]);
+
+  const totalVenta = useMemo(() => items.reduce((acc, i) => acc + i.subtotal, 0), [items]);
+
+  // Auto-fill montoPago1 con el total cuando es pago simple
+  useEffect(() => {
+    if (!usarDosFormas) {
+      setMontoPago1(totalVenta > 0 ? totalVenta.toFixed(2) : '');
+    }
+  }, [totalVenta, usarDosFormas]);
 
   const productosFiltrados = useMemo(() => {
     const q = busquedaProd.trim().toLowerCase();
@@ -102,39 +121,41 @@ export default function Ventas() {
     return parseFloat(prod.stock_actual) - (en ? parseFloat(en.cantidad) : 0);
   };
 
-  const totalVenta = useMemo(() => items.reduce((acc, i) => acc + i.subtotal, 0), [items]);
-
   const disponibleProdSel = prodSel ? stockEfectivo(prodSel) : 0;
-  const cantParseada      = parseFloat(cantInput);
+  const umProdSel         = prodSel?.unidad_medida ?? 'unidades';
+  const esEntero          = UNIDADES_ENTERAS.includes(umProdSel);
+  const cantParseada      = esEntero ? parseInt(cantInput, 10) : parseFloat(cantInput);
+
   const errCantVivo = prodSel && cantInput
     ? (isNaN(cantParseada) || cantParseada <= 0)
       ? 'La cantidad debe ser mayor a 0'
-      : cantParseada > disponibleProdSel
-        ? `Stock insuficiente: disponible ${disponibleProdSel.toLocaleString('es-AR')}, solicitado ${cantParseada.toLocaleString('es-AR')}`
-        : null
+      : esEntero && !Number.isInteger(parseFloat(cantInput))
+        ? `${umProdSel} solo admite cantidades enteras`
+        : cantParseada > disponibleProdSel
+          ? `Stock insuficiente: disponible ${disponibleProdSel.toLocaleString('es-AR')}, solicitado ${cantParseada.toLocaleString('es-AR')}`
+          : null
     : null;
   const puedeAgregarItem = Boolean(prodSel && cantInput && !errCantVivo);
 
-  // Validaciones de CC
-  const esCC1     = formaPago1 === 'Cuenta corriente';
-  const esCC2     = usarDosFormas && formaPago2 === 'Cuenta corriente';
+  // Validaciones CC
+  const esCC1      = formaPago1 === 'Cuenta corriente';
+  const esCC2      = usarDosFormas && formaPago2 === 'Cuenta corriente';
   const requiereCC = esCC1 || esCC2;
   const errCC = requiereCC && !dniCliente
     ? 'Para pago en Cuenta Corriente debe seleccionar un cliente'
     : null;
 
-  // Monto CC efectivo para verificar límite
+  const mp1Num = parseFloat(montoPago1) || 0;
+  const mp2Num = parseFloat(montoPago2) || 0;
+
   const montoCC = useMemo(() => {
     if (!requiereCC) return 0;
     if (!usarDosFormas) return totalVenta;
-    return esCC1 ? (parseFloat(montoPago1) || 0) : (parseFloat(montoPago2) || 0);
-  }, [requiereCC, usarDosFormas, esCC1, montoPago1, montoPago2, totalVenta]);
+    return esCC1 ? mp1Num : mp2Num;
+  }, [requiereCC, usarDosFormas, esCC1, mp1Num, mp2Num, totalVenta]);
 
   const excedeLimite = infoCC && montoCC > 0 && (infoCC.saldo + montoCC > infoCC.limite);
 
-  // Validación split de pago
-  const mp1Num  = parseFloat(montoPago1) || 0;
-  const mp2Num  = parseFloat(montoPago2) || 0;
   const errSplit = usarDosFormas && items.length > 0 && totalVenta > 0
     ? Math.abs(mp1Num + mp2Num - totalVenta) > 0.01
       ? mp1Num + mp2Num < totalVenta
@@ -148,7 +169,8 @@ export default function Ventas() {
     : null;
 
   const puedeGuardar = items.length > 0 && !errDireccion && !errCC && !errSplit && !excedeLimite
-    && (!usarDosFormas || (mp1Num > 0 && mp2Num > 0));
+    && (!usarDosFormas || (mp1Num > 0 && mp2Num > 0))
+    && (!usarDosFormas ? mp1Num > 0 : true);
 
   const abrirModal = () => {
     setModalVenta(true);
@@ -158,7 +180,7 @@ export default function Ventas() {
 
   const cerrarModal = () => {
     setModalVenta(false); setItems([]); setDniCliente('');
-    setFormaPago1('Efectivo'); setUsarDosFormas(false); setFormaPago2('Efectivo');
+    setFormaPago1('Efectivo'); setUsarDosFormas(false); setFormaPago2('Transferencia');
     setMontoPago1(''); setMontoPago2('');
     setFormaEntrega('Depósito'); setDireccionEntrega(''); setObservaciones('');
     setBusquedaProd(''); setProdSel(null); setCantInput(''); setErrorGuardado(null);
@@ -175,12 +197,22 @@ export default function Ventas() {
       setItems(prev => prev.map(i => i.producto_codigo === prodSel.codigo
         ? { ...i, cantidad: parseFloat(i.cantidad) + cant, subtotal: (parseFloat(i.cantidad) + cant) * precio } : i));
     } else {
-      setItems(prev => [...prev, { producto_codigo: prodSel.codigo, nombre: prodSel.nombre, cantidad: cant, precio_unitario: precio, subtotal }]);
+      setItems(prev => [...prev, { producto_codigo: prodSel.codigo, nombre: prodSel.nombre, cantidad: cant, precio_unitario: precio, subtotal, unidad_medida: umProdSel }]);
     }
     setProdSel(null); setBusquedaProd(''); setCantInput('');
   };
 
   const quitarItem = codigo => setItems(prev => prev.filter(i => i.producto_codigo !== codigo));
+
+  const activarSegundaForma = (checked) => {
+    setUsarDosFormas(checked);
+    if (checked) {
+      setMontoPago2((totalVenta - mp1Num > 0 ? totalVenta - mp1Num : 0).toFixed(2));
+    } else {
+      setMontoPago2('');
+      setMontoPago1(totalVenta > 0 ? totalVenta.toFixed(2) : '');
+    }
+  };
 
   const guardarVenta = async () => {
     if (!puedeGuardar) return;
@@ -203,6 +235,29 @@ export default function Ventas() {
       cerrarModal(); cargarVentas();
     } catch (err) { setErrorGuardado(err.message); }
     finally      { setGuardando(false); }
+  };
+
+  // ─── Nuevo cliente desde venta ───
+  const abrirNuevoCli = () => {
+    setFormCli(FORM_CLI_VACIO); setErrCli(null); setModalNuevoCli(true);
+  };
+
+  const guardarNuevoCli = async () => {
+    if (!formCli.nombre_apellido.trim()) { setErrCli('El nombre es obligatorio'); return; }
+    if (!formCli.dni.trim())             { setErrCli('El DNI es obligatorio'); return; }
+    setGuardandoCli(true); setErrCli(null);
+    try {
+      const res  = await fetch(`${API}/api/clientes`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dni: formCli.dni, nombre_apellido: formCli.nombre_apellido, telefono: formCli.telefono || null, tipo: formCli.tipo }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      setClientes(prev => [...prev, data].sort((a, b) => a.nombre_apellido.localeCompare(b.nombre_apellido)));
+      setDniCliente(data.dni);
+      setModalNuevoCli(false);
+    } catch (err) { setErrCli(err.message); }
+    finally      { setGuardandoCli(false); }
   };
 
   const verComprobante = async id => {
@@ -305,15 +360,23 @@ export default function Ventas() {
       {modalVenta && (
         <Modal titulo="Nueva venta" onCerrar={cerrarModal} ancho={700}>
 
+          {/* Cliente */}
           <p className="form-section-titulo">Cliente</p>
           <div className="form-group">
             <label>Seleccionar cliente</label>
-            <select value={dniCliente} onChange={e => setDniCliente(e.target.value)}>
-              <option value="">— Consumidor final —</option>
-              {clientes.map(c => <option key={c.dni} value={c.dni}>{c.nombre_apellido} ({c.dni})</option>)}
-            </select>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <select value={dniCliente} onChange={e => setDniCliente(e.target.value)} style={{ flex: 1 }}>
+                <option value="">— Consumidor final —</option>
+                {clientes.map(c => <option key={c.dni} value={c.dni}>{c.nombre_apellido} ({c.dni})</option>)}
+              </select>
+              <button type="button" className="btn btn-secundario" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+                onClick={abrirNuevoCli}>
+                + Nuevo cliente
+              </button>
+            </div>
           </div>
 
+          {/* Búsqueda de producto */}
           <p className="form-section-titulo">Agregar productos</p>
           <div className="search-container" ref={searchRef}>
             <input className="buscador" style={{ maxWidth: '100%', marginBottom: 0 }}
@@ -328,6 +391,9 @@ export default function Ventas() {
                       onMouseDown={() => seleccionarProducto(p)}>
                       <span className="search-result-nombre">
                         {p.nombre}
+                        <span style={{ fontSize: 11, color: 'var(--texto-suave)', marginLeft: 6 }}>
+                          ({p.unidad_medida ?? 'unidades'})
+                        </span>
                         <span className={`search-result-stock-inline ${stock <= parseFloat(p.stock_minimo) ? 'stock-bajo' : ''}`}>
                           — Stock: {stock.toLocaleString('es-AR')}{sinStock && ' ⚠ Sin stock'}
                         </span>
@@ -344,27 +410,44 @@ export default function Ventas() {
             )}
           </div>
 
+          {/* Card producto seleccionado */}
           {prodSel && (
             <div className="prod-seleccionado-card">
               <div className="prod-sel-info">
                 <span className="prod-sel-nombre">{prodSel.nombre}</span>
                 <span className="prod-sel-stock">
-                  Stock disponible: <strong style={{ color: disponibleProdSel <= 0 ? 'var(--rojo)' : disponibleProdSel <= parseFloat(prodSel.stock_minimo) ? 'var(--amarillo)' : 'var(--verde)' }}>{disponibleProdSel.toLocaleString('es-AR')}</strong>
+                  Stock disponible: <strong style={{ color: disponibleProdSel <= 0 ? 'var(--rojo)' : disponibleProdSel <= parseFloat(prodSel.stock_minimo) ? 'var(--amarillo)' : 'var(--verde)' }}>
+                    {disponibleProdSel.toLocaleString('es-AR')} {umProdSel}
+                  </strong>
                   {' — '}Precio: ${fmt(prodSel.precio_venta)}
                 </span>
               </div>
               <div className="prod-sel-controles">
-                <input type="number" placeholder="Cantidad" value={cantInput}
-                  onChange={e => setCantInput(e.target.value)}
-                  className={errCantVivo ? 'error-campo' : ''} min="0.01" step="0.01" autoFocus
-                  onKeyDown={e => { if (e.key === 'Enter') agregarItem(); }} />
-                <button className="btn btn-primary" onClick={agregarItem} disabled={!puedeAgregarItem} type="button">Agregar</button>
-                <button className="btn btn-secundario" onClick={() => { setProdSel(null); setBusquedaProd(''); }} type="button">✕</button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--texto-suave)', marginBottom: 0 }}>
+                    Cantidad ({umProdSel})
+                  </label>
+                  <input
+                    type="number"
+                    placeholder={esEntero ? '0' : '0.00'}
+                    value={cantInput}
+                    onChange={e => setCantInput(e.target.value)}
+                    className={errCantVivo ? 'error-campo' : ''}
+                    min={esEntero ? '1' : '0.01'}
+                    step={esEntero ? '1' : '0.01'}
+                    autoFocus
+                    style={{ width: 110 }}
+                    onKeyDown={e => { if (e.key === 'Enter') agregarItem(); }}
+                  />
+                </div>
+                <button className="btn btn-primary" onClick={agregarItem} disabled={!puedeAgregarItem} type="button" style={{ alignSelf: 'flex-end' }}>Agregar</button>
+                <button className="btn btn-secundario" onClick={() => { setProdSel(null); setBusquedaProd(''); }} type="button" style={{ alignSelf: 'flex-end' }}>✕</button>
               </div>
               {errCantVivo && <span className="error-msg" style={{ width: '100%' }}>{errCantVivo}</span>}
             </div>
           )}
 
+          {/* Items de la venta */}
           {items.length > 0 && (
             <>
               <p className="form-section-titulo">Items de la venta</p>
@@ -375,7 +458,10 @@ export default function Ventas() {
                     {items.map(i => (
                       <tr key={i.producto_codigo}>
                         <td style={{ fontWeight: 500 }}>{i.nombre}</td>
-                        <td style={{ textAlign: 'right' }}>{i.cantidad.toLocaleString('es-AR')}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          {i.cantidad.toLocaleString('es-AR')}
+                          {i.unidad_medida && <span style={{ fontSize: 11, color: 'var(--texto-suave)', marginLeft: 4 }}>{i.unidad_medida}</span>}
+                        </td>
                         <td style={{ textAlign: 'right' }}>${fmt(i.precio_unitario)}</td>
                         <td style={{ textAlign: 'right', fontWeight: 700 }}>${fmt(i.subtotal)}</td>
                         <td><button className="btn-quitar" onClick={() => quitarItem(i.producto_codigo)}>✕</button></td>
@@ -391,16 +477,25 @@ export default function Ventas() {
             </>
           )}
 
+          {/* Pago y entrega */}
           <p className="form-section-titulo">Pago y entrega</p>
           <div className="form-grid">
 
-            {/* Forma de pago principal */}
+            {/* Forma de pago 1 */}
             <div className="form-group">
-              <label>Forma de pago principal</label>
+              <label>Forma de pago</label>
               <select value={formaPago1}
-                onChange={e => { setFormaPago1(e.target.value); setUsarDosFormas(false); setMontoPago1(''); setMontoPago2(''); }}>
+                onChange={e => { setFormaPago1(e.target.value); setUsarDosFormas(false); setMontoPago2(''); }}>
                 {FORMAS_PAGO.map(f => <option key={f} value={f}>{f}</option>)}
               </select>
+            </div>
+
+            {/* Monto pago 1 — siempre visible */}
+            <div className="form-group">
+              <label>Monto — {formaPago1}</label>
+              <input type="number" min="0.01" step="0.01" value={montoPago1}
+                onChange={e => setMontoPago1(e.target.value)}
+                placeholder={totalVenta > 0 ? `$${fmt(totalVenta)}` : '$0.00'} />
             </div>
 
             {/* Forma de entrega */}
@@ -412,28 +507,20 @@ export default function Ventas() {
               </select>
             </div>
 
-            {/* Opción segundo medio */}
-            <div className="form-group span-2">
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 400 }}>
+            {/* Checkbox segunda forma */}
+            <div className="form-group" style={{ display: 'flex', alignItems: 'center' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 400, marginTop: 20 }}>
                 <input type="checkbox" checked={usarDosFormas}
-                  onChange={e => {
-                    setUsarDosFormas(e.target.checked);
-                    setMontoPago1(''); setMontoPago2('');
-                  }} />
-                Agregar segundo medio de pago
+                  onChange={e => activarSegundaForma(e.target.checked)} />
+                Agregar segunda forma de pago
               </label>
             </div>
 
-            {/* Montos si doble pago */}
+            {/* Segunda forma de pago */}
             {usarDosFormas && (
               <>
                 <div className="form-group">
-                  <label>Monto — {formaPago1}</label>
-                  <input type="number" min="0.01" step="0.01" value={montoPago1}
-                    onChange={e => setMontoPago1(e.target.value)} placeholder="$0.00" />
-                </div>
-                <div className="form-group">
-                  <label>Segundo medio de pago</label>
+                  <label>Segunda forma de pago</label>
                   <select value={formaPago2} onChange={e => setFormaPago2(e.target.value)}>
                     {FORMAS_PAGO.map(f => <option key={f} value={f}>{f}</option>)}
                   </select>
@@ -444,10 +531,11 @@ export default function Ventas() {
                     onChange={e => setMontoPago2(e.target.value)} placeholder="$0.00" />
                 </div>
                 {items.length > 0 && (
-                  <div className="form-group" style={{ display: 'flex', alignItems: 'center' }}>
-                    <p style={{ fontSize: 13, color: 'var(--texto-suave)' }}>
+                  <div className="form-group span-2">
+                    <p style={{ fontSize: 13, color: 'var(--texto-suave)', margin: 0 }}>
                       Total: <strong style={{ color: 'var(--texto)' }}>${fmt(totalVenta)}</strong>
-                      {mp1Num + mp2Num > 0 && Math.abs(mp1Num + mp2Num - totalVenta) <= 0.01 && (
+                      {' · '}Asignado: <strong>${fmt(mp1Num + mp2Num)}</strong>
+                      {Math.abs(mp1Num + mp2Num - totalVenta) <= 0.01 && (
                         <span style={{ color: 'var(--verde)', marginLeft: 8 }}>✓ Cubierto</span>
                       )}
                     </p>
@@ -473,11 +561,9 @@ export default function Ventas() {
             </div>
           </div>
 
-          {/* Errores de pago */}
-          {errCC     && <p className="error-msg" style={{ marginTop: 8 }}>{errCC}</p>}
-          {errSplit  && <p className="error-msg" style={{ marginTop: 8 }}>{errSplit}</p>}
+          {errCC    && <p className="error-msg" style={{ marginTop: 8 }}>{errCC}</p>}
+          {errSplit && <p className="error-msg" style={{ marginTop: 8 }}>{errSplit}</p>}
 
-          {/* Info CC en tiempo real */}
           {infoCC && (
             <div style={{
               background: excedeLimite ? 'var(--rojo-fondo)' : 'var(--verde-fondo)',
@@ -494,7 +580,6 @@ export default function Ventas() {
               {excedeLimite && (
                 <p style={{ color: 'var(--rojo)', fontWeight: 700, marginTop: 6, fontSize: 13 }}>
                   ⚠ Esta compra (${fmt(montoCC)}) excedería el límite.
-                  Total resultante: ${fmt(infoCC.saldo + montoCC)} / Límite: ${fmt(infoCC.limite)}
                 </p>
               )}
             </div>
@@ -515,7 +600,45 @@ export default function Ventas() {
         </Modal>
       )}
 
-      {/* ─── Comprobante ─── */}
+      {/* ─── Mini-modal nuevo cliente ─── */}
+      {modalNuevoCli && (
+        <Modal titulo="Nuevo cliente" onCerrar={() => setModalNuevoCli(false)} ancho={460}>
+          <div className="form-grid">
+            <div className="form-group span-2">
+              <label>Nombre y apellido *</label>
+              <input value={formCli.nombre_apellido}
+                onChange={e => setFormCli(f => ({ ...f, nombre_apellido: e.target.value }))}
+                placeholder="Nombre completo" autoFocus />
+            </div>
+            <div className="form-group">
+              <label>DNI / CUIT *</label>
+              <input value={formCli.dni}
+                onChange={e => setFormCli(f => ({ ...f, dni: e.target.value }))}
+                placeholder="Ej: 30123456" />
+            </div>
+            <div className="form-group">
+              <label>Teléfono</label>
+              <input value={formCli.telefono}
+                onChange={e => setFormCli(f => ({ ...f, telefono: e.target.value }))}
+                placeholder="Ej: 3884123456" />
+            </div>
+            <div className="form-group span-2">
+              <label>Tipo</label>
+              <select value={formCli.tipo} onChange={e => setFormCli(f => ({ ...f, tipo: e.target.value }))}>
+                {TIPOS_CLIENTE.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+          </div>
+          {errCli && <p className="error-msg" style={{ marginTop: 14 }}>{errCli}</p>}
+          <div className="modal-footer">
+            <button className="btn btn-secundario" type="button" onClick={() => setModalNuevoCli(false)}>Cancelar</button>
+            <button className="btn btn-primary" type="button" onClick={guardarNuevoCli} disabled={guardandoCli}>
+              {guardandoCli ? 'Guardando...' : 'Crear cliente'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {comprobante && <Comprobante datos={comprobante} tipo="venta" onCerrar={() => setComprobante(null)} />}
     </div>
   );
