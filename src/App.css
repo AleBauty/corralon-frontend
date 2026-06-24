@@ -1002,4 +1002,27 @@ code {
   .comp-no-print { display: none !important; }
   .comp-tabla th  { background: #1e293b !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .comp-total-row { background: #1e293b !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  /* Hoja de ruta — anula el modo comprobante cuando está activo */
+  body.print-hoja-ruta * { visibility: hidden; }
+  body.print-hoja-ruta #hoja-ruta-print,
+  body.print-hoja-ruta #hoja-ruta-print * { visibility: visible; }
+  body.print-hoja-ruta #hoja-ruta-print {
+    display: block !important;
+    position: fixed; inset: 0; background: #fff;
+    padding: 28px 36px; box-sizing: border-box;
+    font-size: 13px; overflow: visible;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  body.print-hoja-ruta .parada-print-card { page-break-inside: avoid; margin-bottom: 20px; }
+  body.print-hoja-ruta .parada-print-card div[style*="background:#1e293b"],
+  body.print-hoja-ruta .parada-print-card div[style*="background: #1e293b"] {
+    background: #1e293b !important; color: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  body.print-hoja-ruta .parada-print-card div[style*="background:#f97316"],
+  body.print-hoja-ruta .parada-print-card div[style*="background: #f97316"] {
+    background: #f97316 !important; color: white !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
 }

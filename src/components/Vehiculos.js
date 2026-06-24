@@ -5,169 +5,216 @@ const API     = process.env.REACT_APP_API_URL || 'http://localhost:3000';
 const ORS_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImFlMWU5NDE4ZWM0YjRjOWZiOWNiN2RlMzQ0ZjgzNWNhIiwiaCI6Im11cm11cjY0In0=';
 const ORIGEN  = [-65.2667, -24.3833]; // [lng, lat] El Carmen, Jujuy
 
-function MapaRuta({ direccion }) {
-  const mapRef     = useRef(null);
-  const mapInst    = useRef(null);
-  const [info,     setInfo]     = useState(null);
-  const [cargando, setCargando] = useState(true);
-  const [error,    setError]    = useState('');
+/* ─────────────────────────────────────────────────────────
+   HELPERS
+───────────────────────────────────────────────────────── */
+function fmt(n) { return parseFloat(n ?? 0).toLocaleString('es-AR', { minimumFractionDigits: 2 }); }
+function fechaCorta(iso) {
+  if (!iso) return '—';
+  const [y, m, d] = String(iso).substring(0, 10).split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('es-AR');
+}
+function fechaLarga(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+const ESTADOS_VEH = ['Disponible', 'En reparto', 'En mantenimiento'];
+const FORM_VACIO  = { patente: '', tipo: '', marca: '', modelo: '', anio: '', estado: 'Disponible', kilometraje_actual: '' };
+const FORM_MANT   = { tipo: '', descripcion: '', fecha: new Date().toISOString().substring(0, 10), costo: '', kilometraje: '', proximo_service: '', estado: 'Realizado' };
+const TIPOS_MANT  = ['Service', 'Reparación', 'Cambio de aceite', 'Cambio de neumáticos', 'Revisión técnica', 'Otro'];
+
+const ESTADO_ESTILO = {
+  'Disponible':       { background: '#dcfce7', color: '#166534' },
+  'En reparto':       { background: '#eef2ff', color: '#3730a3' },
+  'En mantenimiento': { background: '#fef9c3', color: '#854d0e' },
+};
+
+/* ─────────────────────────────────────────────────────────
+   MAPA MULTI-PARADA (Leaflet)
+───────────────────────────────────────────────────────── */
+function MapaMultiRuta({ paradas, rutaGeoJSON }) {
+  const mapRef  = useRef(null);
+  const mapInst = useRef(null);
 
   useEffect(() => {
     const L = window.L;
-    if (!L || !mapRef.current) return;
-
+    if (!L || !mapRef.current || !paradas.length) return;
     if (mapInst.current) { mapInst.current.remove(); mapInst.current = null; }
 
-    const map = L.map(mapRef.current).setView([ORIGEN[1], ORIGEN[0]], 10);
+    const map = L.map(mapRef.current);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
     }).addTo(map);
     mapInst.current = map;
 
-    L.marker([ORIGEN[1], ORIGEN[0]]).addTo(map)
-      .bindPopup('<b>Corralón — El Carmen, Jujuy</b>').openPopup();
+    const origenIcon = L.divIcon({
+      className: '',
+      html: `<div style="width:34px;height:34px;background:#1e293b;color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:17px;border:2.5px solid white;box-shadow:0 2px 8px rgba(0,0,0,.4)">🧱</div>`,
+      iconSize: [34, 34], iconAnchor: [17, 17],
+    });
+    L.marker([ORIGEN[1], ORIGEN[0]], { icon: origenIcon }).addTo(map)
+      .bindPopup('<strong>Corralón — El Carmen, Jujuy</strong>');
 
-    const calcular = async () => {
-      try {
-        const geoRes = await fetch(
-          `https://api.openrouteservice.org/geocode/search?api_key=${ORS_KEY}` +
-          `&text=${encodeURIComponent(direccion + ', Jujuy, Argentina')}` +
-          `&boundary.country=AR&size=1`
-        );
-        const geoData = await geoRes.json();
+    paradas.forEach((p, i) => {
+      const n = i + 1;
+      const stopIcon = L.divIcon({
+        className: '',
+        html: `<div style="width:28px;height:28px;background:#f97316;color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;border:2.5px solid white;box-shadow:0 2px 8px rgba(0,0,0,.3)">${n}</div>`,
+        iconSize: [28, 28], iconAnchor: [14, 14],
+      });
+      L.marker([p.lat, p.lng], { icon: stopIcon }).addTo(map)
+        .bindPopup(`<strong>Parada ${n}</strong><br>${p.cliente ?? 'Sin cliente'}<br><small>${p.direccion_entrega}</small>`);
+    });
 
-        if (!geoData.features?.length) {
-          setError('No se pudo geocodificar el domicilio. Verificá la dirección.');
-          setCargando(false);
-          return;
-        }
+    if (rutaGeoJSON) {
+      const layer = L.geoJSON(rutaGeoJSON, {
+        style: { color: '#f97316', weight: 4, opacity: 0.85 },
+      }).addTo(map);
+      map.fitBounds(layer.getBounds(), { padding: [28, 28] });
+    } else {
+      const bounds = [[ORIGEN[1], ORIGEN[0]], ...paradas.map(p => [p.lat, p.lng])];
+      map.fitBounds(bounds, { padding: [28, 28] });
+    }
 
-        const [dLng, dLat] = geoData.features[0].geometry.coordinates;
+    return () => { if (mapInst.current) { mapInst.current.remove(); mapInst.current = null; } };
+  }, [paradas, rutaGeoJSON]);
 
-        L.marker([dLat, dLng]).addTo(map)
-          .bindPopup(`<b>Destino</b><br>${direccion}`);
+  return <div ref={mapRef} style={{ height: 360, borderRadius: 10, overflow: 'hidden' }} />;
+}
 
-        const routeRes = await fetch(
-          'https://api.openrouteservice.org/v2/directions/driving-car/geojson',
-          {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': ORS_KEY },
-            body:    JSON.stringify({ coordinates: [ORIGEN, [dLng, dLat]] }),
-          }
-        );
-        const routeData = await routeRes.json();
-
-        if (routeData.features?.length) {
-          const summary = routeData.features[0].properties.summary;
-          setInfo({
-            distKm: (summary.distance / 1000).toFixed(1),
-            durMin: Math.round(summary.duration / 60),
-          });
-          const layer = L.geoJSON(routeData.features[0], {
-            style: { color: '#2563eb', weight: 4, opacity: 0.8 },
-          }).addTo(map);
-          map.fitBounds(layer.getBounds(), { padding: [24, 24] });
-        } else {
-          setError('No se encontró ruta para esta dirección.');
-        }
-      } catch {
-        setError('Error al calcular la ruta. Verificá la conexión.');
-      } finally {
-        setCargando(false);
-      }
-    };
-
-    calcular();
-
-    return () => {
-      if (mapInst.current) { mapInst.current.remove(); mapInst.current = null; }
-    };
-  }, [direccion]);
+/* ─────────────────────────────────────────────────────────
+   HOJA DE RUTA IMPRIMIBLE (div oculto)
+───────────────────────────────────────────────────────── */
+function HojaRutaImprimible({ vehiculo, paradas, totalKm, totalMin }) {
+  const hoy = new Date().toLocaleDateString('es-AR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
 
   return (
-    <div>
-      <div ref={mapRef} style={{ height: 340, borderRadius: 8, overflow: 'hidden', marginBottom: 12 }} />
-      {cargando && <p style={{ fontSize: 13, color: 'var(--texto-suave)', margin: 0 }}>Calculando ruta...</p>}
-      {error   && <p style={{ fontSize: 13, color: '#dc2626', margin: 0 }}>{error}</p>}
-      {info    && (
-        <div style={{ display: 'flex', gap: 20 }}>
-          <div style={{ background: '#eff6ff', borderRadius: 8, padding: '8px 14px', fontSize: 13 }}>
-            📍 Distancia: <strong style={{ color: '#1d4ed8' }}>{info.distKm} km</strong>
+    <div id="hoja-ruta-print">
+      {/* Encabezado */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 20, borderBottom: '3px solid #f97316', paddingBottom: 20, marginBottom: 24 }}>
+        <span style={{ fontSize: 50, lineHeight: 1 }}>🧱</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: '#1e293b', letterSpacing: -0.5 }}>Corralón Virgen de Punta Corral</div>
+          <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>El Carmen, Jujuy · Sistema de Gestión v1.0</div>
+        </div>
+        <div style={{ textAlign: 'right', fontSize: 13, lineHeight: 1.8, color: '#1e293b' }}>
+          <div><strong>Fecha:</strong> {hoy}</div>
+          <div><strong>Vehículo:</strong> {vehiculo.patente}{vehiculo.tipo ? ` — ${vehiculo.tipo}` : ''}</div>
+          {vehiculo.marca && <div><strong>{vehiculo.marca} {vehiculo.modelo ?? ''}</strong> {vehiculo.anio ?? ''}</div>}
+        </div>
+      </div>
+
+      <div style={{ fontSize: 16, fontWeight: 800, color: '#f97316', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 20 }}>
+        Orden de visitas — {paradas.length} parada{paradas.length !== 1 ? 's' : ''}
+      </div>
+
+      {paradas.map((p, i) => (
+        <div key={p.id} className="parada-print-card">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: '#1e293b', color: 'white', padding: '10px 18px', borderRadius: '8px 8px 0 0', marginBottom: 0 }}>
+            <div style={{ width: 30, height: 30, background: '#f97316', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: 15, flexShrink: 0 }}>{i + 1}</div>
+            <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: 0.3 }}>PARADA {i + 1}</span>
+            {p.distKm && <span style={{ marginLeft: 'auto', fontSize: 12, opacity: 0.8 }}>📍 {p.distKm} km · ~{p.durMin} min desde parada anterior</span>}
           </div>
-          <div style={{ background: '#f0fdf4', borderRadius: 8, padding: '8px 14px', fontSize: 13 }}>
-            🕐 Tiempo estimado: <strong style={{ color: '#15803d' }}>{info.durMin} min</strong>
+
+          <div style={{ border: '2px solid #e2e8f0', borderTop: 'none', borderRadius: '0 0 8px 8px', padding: '16px 20px' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+              <tbody>
+                <tr><td style={{ width: 130, fontWeight: 700, paddingBottom: 8, color: '#475569' }}>Cliente:</td><td style={{ fontWeight: 600 }}>{p.cliente ?? 'Consumidor final'}</td></tr>
+                {p.cliente_dni && <tr><td style={{ fontWeight: 700, paddingBottom: 8, color: '#475569' }}>DNI:</td><td>{p.cliente_dni}</td></tr>}
+                <tr><td style={{ fontWeight: 700, paddingBottom: 8, color: '#475569' }}>Domicilio:</td><td style={{ fontWeight: 700, color: '#1e293b' }}>{p.direccion_entrega}</td></tr>
+                {p.cliente_telefono && <tr><td style={{ fontWeight: 700, paddingBottom: 8, color: '#475569' }}>Teléfono:</td><td>{p.cliente_telefono}</td></tr>}
+              </tbody>
+            </table>
+
+            {p.items?.length > 0 && (
+              <div style={{ marginTop: 14, borderTop: '1px solid #e2e8f0', paddingTop: 12 }}>
+                <div style={{ fontWeight: 800, fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.6, color: '#f97316', marginBottom: 8 }}>Productos a entregar:</div>
+                <ul style={{ margin: 0, paddingLeft: 20, lineHeight: 1.9 }}>
+                  {p.items.map((item, idx) => (
+                    <li key={idx}>{item.producto} — <strong>x {parseFloat(item.cantidad).toLocaleString('es-AR')}</strong></li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div style={{ marginTop: 20, paddingTop: 14, borderTop: '1px dashed #cbd5e1', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <strong style={{ fontSize: 13 }}>Firma de recepción:</strong>
+              <span style={{ flex: 1, borderBottom: '1.5px solid #94a3b8', marginBottom: 3 }}>&nbsp;</span>
+              <span style={{ fontSize: 13, color: '#94a3b8' }}>Aclaración:</span>
+              <span style={{ flex: 1, borderBottom: '1.5px solid #94a3b8', marginBottom: 3 }}>&nbsp;</span>
+            </div>
           </div>
         </div>
-      )}
+      ))}
+
+      {/* Resumen */}
+      <div style={{ marginTop: 32, border: '2px solid #1e293b', borderRadius: 10, padding: '18px 24px', background: '#f8fafc' }}>
+        <div style={{ fontWeight: 800, fontSize: 14, color: '#1e293b', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.6 }}>Resumen del recorrido</div>
+        <div style={{ display: 'flex', gap: 40 }}>
+          <div><span style={{ color: '#64748b' }}>Total de paradas:</span> <strong>{paradas.length}</strong></div>
+          <div><span style={{ color: '#64748b' }}>Distancia total:</span> <strong>{totalKm} km</strong></div>
+          <div><span style={{ color: '#64748b' }}>Tiempo estimado:</span> <strong>~{totalMin} min</strong></div>
+        </div>
+      </div>
     </div>
   );
 }
 
-const ESTADOS_VEH = ['Disponible', 'En reparto', 'En mantenimiento'];
-
-const FORM_VACIO = { patente: '', tipo: '', marca: '', modelo: '', anio: '', estado: 'Disponible', kilometraje_actual: '' };
-const FORM_MANT  = { tipo: '', descripcion: '', fecha: new Date().toISOString().substring(0, 10), costo: '', kilometraje: '', proximo_service: '', estado: 'Realizado' };
-const TIPOS_MANT = ['Service', 'Reparación', 'Cambio de aceite', 'Cambio de neumáticos', 'Revisión técnica', 'Otro'];
-
-const ESTADO_ESTILO = {
-  'Disponible':       { background: '#e6f9f0', color: '#1a8a4a' },
-  'En reparto':       { background: '#eef2ff', color: '#3730a3' },
-  'En mantenimiento': { background: '#FEF9E7', color: '#B7770D' },
-};
-
-function fmt(n) { return parseFloat(n ?? 0).toLocaleString('es-AR', { minimumFractionDigits: 2 }); }
-function formatFecha(iso) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-function formatFechaCorta(iso) {
-  if (!iso) return '—';
-  const [y, m, d] = String(iso).substring(0, 10).split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('es-AR');
-}
-
+/* ─────────────────────────────────────────────────────────
+   COMPONENTE PRINCIPAL
+───────────────────────────────────────────────────────── */
 export default function Vehiculos() {
-  const [tab, setTab]                   = useState('flota');
+  const [tab, setTab] = useState('flota');
 
-  // ── Flota state ────────────────────────────────────────────────
-  const [vehiculos, setVehiculos]       = useState([]);
-  const [pendientes, setPendientes]     = useState([]);
-  const [cargando, setCargando]         = useState(true);
-  const [error, setError]               = useState(null);
+  // ── Flota ──────────────────────────────────────────────
+  const [vehiculos,  setVehiculos]  = useState([]);
+  const [pendientes, setPendientes] = useState([]);
+  const [cargando,   setCargando]   = useState(true);
+  const [error,      setError]      = useState(null);
 
-  const [modalAbierto, setModalAbierto] = useState(false);
-  const [esEdicion, setEsEdicion]       = useState(false);
-  const [form, setForm]                 = useState(FORM_VACIO);
-  const [editId, setEditId]             = useState(null);
-  const [guardando, setGuardando]       = useState(false);
-  const [errGuardado, setErrGuardado]   = useState(null);
+  // ── Modal CRUD vehículo ────────────────────────────────
+  const [modalVeh,   setModalVeh]   = useState(false);
+  const [esEdicion,  setEsEdicion]  = useState(false);
+  const [form,       setForm]       = useState(FORM_VACIO);
+  const [editId,     setEditId]     = useState(null);
+  const [guardando,  setGuardando]  = useState(false);
+  const [errVeh,     setErrVeh]     = useState(null);
 
-  const [asignando, setAsignando]       = useState(null);
-  const [vehAsignar, setVehAsignar]     = useState('');
-  const [errAsignar, setErrAsignar]     = useState(null);
+  // ── Modal asignar entregas ─────────────────────────────
+  const [modalAsignar,  setModalAsignar]  = useState(null); // vehiculo obj
+  const [seleccionadas, setSeleccionadas] = useState(new Set());
+  const [asignando,     setAsignando]     = useState(false);
+  const [errAsignar,    setErrAsignar]    = useState(null);
 
-  const [detalleEntrega, setDetalleEntrega]         = useState(null);
-  const [cargandoDetalle, setCargandoDetalle]       = useState(false);
-  const [marcandoEntregada, setMarcandoEntregada]   = useState(false);
-  const [errDetalle, setErrDetalle]                 = useState(null);
+  // ── Modal ruta optimizada ──────────────────────────────
+  const [modalRuta,      setModalRuta]      = useState(null); // vehiculo obj
+  const [calculandoRuta, setCalculandoRuta] = useState(false);
+  const [errRuta,        setErrRuta]        = useState('');
+  const [rutaData,       setRutaData]       = useState(null);
+  const [entregandoTodas, setEntregandoTodas] = useState(false);
 
-  const [ventaMapa, setVentaMapa]   = useState(null);
+  // ── Detalle de entrega individual ─────────────────────
+  const [detalleEntrega,      setDetalleEntrega]      = useState(null);
+  const [cargandoDetalle,     setCargandoDetalle]     = useState(false);
+  const [marcandoEntregada,   setMarcandoEntregada]   = useState(false);
+  const [errDetalle,          setErrDetalle]          = useState(null);
 
-  // ── Mantenimiento state ────────────────────────────────────────
-  const [vehSelMant, setVehSelMant]         = useState('');
-  const [historial, setHistorial]           = useState([]);
-  const [cargandoMant, setCargandoMant]     = useState(false);
-  const [modalMant, setModalMant]           = useState(false);
-  const [formMant, setFormMant]             = useState(FORM_MANT);
-  const [guardandoMant, setGuardandoMant]   = useState(false);
-  const [errMant, setErrMant]               = useState(null);
+  // ── Mantenimiento ──────────────────────────────────────
+  const [vehSelMant,    setVehSelMant]    = useState('');
+  const [historial,     setHistorial]     = useState([]);
+  const [cargandoMant,  setCargandoMant]  = useState(false);
+  const [modalMant,     setModalMant]     = useState(false);
+  const [formMant,      setFormMant]      = useState(FORM_MANT);
+  const [guardandoMant, setGuardandoMant] = useState(false);
+  const [errMant,       setErrMant]       = useState(null);
 
-  // ── Cargar flota ───────────────────────────────────────────────
+  /* ── Carga de datos ──────────────────────────────────── */
   const cargarVehiculos = useCallback(() => {
     fetch(`${API}/api/vehiculos`)
       .then(r => r.ok ? r.json() : Promise.reject(`Error ${r.status}`))
       .then(data => { setVehiculos(data); setCargando(false); })
-      .catch(err => { setError(String(err)); setCargando(false); });
+      .catch(err  => { setError(String(err)); setCargando(false); });
   }, []);
 
   const cargarPendientes = useCallback(() => {
@@ -177,9 +224,6 @@ export default function Vehiculos() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => { cargarVehiculos(); cargarPendientes(); }, [cargarVehiculos, cargarPendientes]);
-
-  // ── Cargar historial mantenimiento ─────────────────────────────
   const cargarHistorial = useCallback(async (vid) => {
     if (!vid) { setHistorial([]); return; }
     setCargandoMant(true);
@@ -187,17 +231,15 @@ export default function Vehiculos() {
       const data = await fetch(`${API}/api/mantenimiento?vehiculo_id=${vid}`).then(r => r.json());
       setHistorial(Array.isArray(data) ? data : []);
     } catch { setHistorial([]); }
-    finally { setCargandoMant(false); }
+    finally   { setCargandoMant(false); }
   }, []);
 
-  useEffect(() => {
-    if (vehSelMant) cargarHistorial(vehSelMant);
-    else setHistorial([]);
-  }, [vehSelMant, cargarHistorial]);
+  useEffect(() => { cargarVehiculos(); cargarPendientes(); }, [cargarVehiculos, cargarPendientes]);
+  useEffect(() => { if (vehSelMant) cargarHistorial(vehSelMant); else setHistorial([]); }, [vehSelMant, cargarHistorial]);
 
-  // ── Flota CRUD ─────────────────────────────────────────────────
+  /* ── CRUD vehículo ───────────────────────────────────── */
   const abrirCrear = () => {
-    setForm(FORM_VACIO); setEsEdicion(false); setEditId(null); setErrGuardado(null); setModalAbierto(true);
+    setForm(FORM_VACIO); setEsEdicion(false); setEditId(null); setErrVeh(null); setModalVeh(true);
   };
   const abrirEditar = v => {
     setForm({
@@ -205,14 +247,13 @@ export default function Vehiculos() {
       anio: v.anio ?? '', estado: v.estado,
       kilometraje_actual: v.kilometraje_actual != null ? String(v.kilometraje_actual) : '',
     });
-    setEsEdicion(true); setEditId(v.id); setErrGuardado(null); setModalAbierto(true);
+    setEsEdicion(true); setEditId(v.id); setErrVeh(null); setModalVeh(true);
   };
-  const cerrar  = () => setModalAbierto(false);
   const cambiar = (campo, val) => setForm(f => ({ ...f, [campo]: val }));
 
   const guardar = async () => {
-    if (!form.patente.trim()) { setErrGuardado('La patente es obligatoria'); return; }
-    setGuardando(true); setErrGuardado(null);
+    if (!form.patente.trim()) { setErrVeh('La patente es obligatoria'); return; }
+    setGuardando(true); setErrVeh(null);
     const body = {
       tipo: form.tipo.trim() || null, marca: form.marca.trim() || null,
       modelo: form.modelo.trim() || null, anio: form.anio ? parseInt(form.anio, 10) : null,
@@ -226,44 +267,180 @@ export default function Vehiculos() {
       const res  = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
-      cerrar(); cargarVehiculos();
-    } catch (err) { setErrGuardado(err.message); }
+      setModalVeh(false); cargarVehiculos();
+    } catch (err) { setErrVeh(err.message); }
     finally       { setGuardando(false); }
-  };
-
-  // ── Asignación ─────────────────────────────────────────────────
-  const confirmarAsignar = async (venta_id) => {
-    if (!vehAsignar) { setErrAsignar('Seleccioná un vehículo'); return; }
-    setErrAsignar(null);
-    try {
-      const res  = await fetch(`${API}/api/vehiculos/${vehAsignar}/asignar`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ venta_id }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
-      setAsignando(null); setVehAsignar('');
-      cargarVehiculos(); cargarPendientes();
-    } catch (err) { setErrAsignar(err.message); }
   };
 
   const liberar = async id => {
     if (!window.confirm('¿Marcar el vehículo como Disponible?')) return;
     try {
-      const res = await fetch(`${API}/api/vehiculos/${id}/liberar`, { method: 'PUT' });
+      const res  = await fetch(`${API}/api/vehiculos/${id}/liberar`, { method: 'PUT' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       cargarVehiculos();
     } catch (err) { alert('Error: ' + err.message); }
   };
 
-  // ── Detalle de entrega ─────────────────────────────────────────
-  const verDetalle = async (venta) => {
+  /* ── Asignación de entregas (multi-select) ───────────── */
+  const abrirAsignar = v => {
+    setModalAsignar(v);
+    setSeleccionadas(new Set());
+    setErrAsignar(null);
+  };
+
+  const toggleSel = id => {
+    setSeleccionadas(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const selAll = () => {
+    const todos = pendientes.every(p => seleccionadas.has(p.id));
+    setSeleccionadas(todos ? new Set() : new Set(pendientes.map(p => p.id)));
+  };
+
+  const confirmarAsignacion = async () => {
+    if (!modalAsignar || !seleccionadas.size) return;
+    setAsignando(true); setErrAsignar(null);
+    try {
+      const res  = await fetch(`${API}/api/vehiculos/${modalAsignar.id}/asignar`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ venta_ids: [...seleccionadas] }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      setModalAsignar(null);
+      cargarVehiculos(); cargarPendientes();
+    } catch (err) { setErrAsignar(err.message); }
+    finally       { setAsignando(false); }
+  };
+
+  /* ── Ruta optimizada ─────────────────────────────────── */
+  const calcularRuta = async (entregas) => {
+    const conDireccion = entregas.filter(e => e.direccion_entrega);
+    if (!conDireccion.length) throw new Error('Ninguna entrega tiene dirección de domicilio registrada.');
+
+    // 1. Geocodificar
+    const geoParadas = [];
+    for (const p of conDireccion) {
+      const res  = await fetch(
+        `https://api.openrouteservice.org/geocode/search?api_key=${ORS_KEY}` +
+        `&text=${encodeURIComponent(p.direccion_entrega + ', El Carmen, Jujuy, Argentina')}` +
+        `&boundary.country=AR&size=1`
+      );
+      const data = await res.json();
+      if (!data.features?.length) throw new Error(`No se pudo geocodificar: "${p.direccion_entrega}"`);
+      const [lng, lat] = data.features[0].geometry.coordinates;
+      geoParadas.push({ ...p, lng, lat });
+    }
+
+    let paradasOrdenadas = [...geoParadas];
+
+    // 2. Optimizar si hay más de 1 parada
+    if (geoParadas.length > 1) {
+      try {
+        const optRes = await fetch('https://api.openrouteservice.org/optimization', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': ORS_KEY },
+          body: JSON.stringify({
+            jobs:     geoParadas.map((p, i) => ({ id: i, location: [p.lng, p.lat] })),
+            vehicles: [{ id: 0, start: ORIGEN, end: ORIGEN }],
+          }),
+        });
+        const optData = await optRes.json();
+        if (optData.routes?.[0]?.steps) {
+          const jobSteps = optData.routes[0].steps.filter(s => s.type === 'job');
+          if (jobSteps.length === geoParadas.length) {
+            paradasOrdenadas = jobSteps.map(s => geoParadas[s.id]);
+          }
+        }
+      } catch { /* fallback al orden original */ }
+    }
+
+    // 3. Calcular ruta con geometry (ORIGEN → stops → ORIGEN)
+    const waypoints = [ORIGEN, ...paradasOrdenadas.map(p => [p.lng, p.lat]), ORIGEN];
+    const routeRes  = await fetch(
+      'https://api.openrouteservice.org/v2/directions/driving-car/geojson',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': ORS_KEY },
+        body: JSON.stringify({ coordinates: waypoints }),
+      }
+    );
+    const routeData = await routeRes.json();
+    if (!routeData.features?.length) throw new Error('No se encontró ruta para estas direcciones.');
+
+    const feature  = routeData.features[0];
+    const summary  = feature.properties.summary;
+    const segments = feature.properties.segments ?? [];
+
+    // Anotar cada parada con distancia/tiempo desde la parada anterior
+    const paradasConStats = paradasOrdenadas.map((p, i) => ({
+      ...p,
+      distKm: segments[i] ? (segments[i].distance / 1000).toFixed(1) : null,
+      durMin: segments[i] ? Math.round(segments[i].duration / 60) : null,
+    }));
+
+    return {
+      paradasOrdenadas: paradasConStats,
+      rutaGeoJSON:      feature,
+      totalKm:          (summary.distance / 1000).toFixed(1),
+      totalMin:         Math.round(summary.duration / 60),
+    };
+  };
+
+  const abrirRuta = async (vehiculo) => {
+    setModalRuta(vehiculo);
+    setRutaData(null);
+    setErrRuta('');
+    setCalculandoRuta(true);
+    try {
+      const entregas = await fetch(`${API}/api/vehiculos/${vehiculo.id}/entregas`).then(r => r.json());
+      if (!entregas.length) { setErrRuta('Este vehículo no tiene entregas asignadas actualmente.'); return; }
+      const data = await calcularRuta(entregas);
+      setRutaData(data);
+    } catch (err) {
+      setErrRuta(err.message || 'Error al calcular la ruta.');
+    } finally {
+      setCalculandoRuta(false);
+    }
+  };
+
+  const imprimirHojaRuta = () => {
+    const el = document.getElementById('hoja-ruta-print');
+    if (!el) return;
+    el.style.display = 'block';
+    document.body.classList.add('print-hoja-ruta');
+    window.print();
+    document.body.classList.remove('print-hoja-ruta');
+    el.style.display = 'none';
+  };
+
+  const handleEntregarTodas = async () => {
+    if (!modalRuta) return;
+    if (!window.confirm('¿Marcar todas las entregas de este vehículo como entregadas?')) return;
+    setEntregandoTodas(true);
+    try {
+      const res  = await fetch(`${API}/api/vehiculos/${modalRuta.id}/entregar-todas`, { method: 'PUT' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      setModalRuta(null); setRutaData(null);
+      cargarVehiculos(); cargarPendientes();
+    } catch (err) { setErrRuta(err.message); }
+    finally       { setEntregandoTodas(false); }
+  };
+
+  /* ── Detalle entrega individual ──────────────────────── */
+  const verDetalle = async venta => {
     setCargandoDetalle(true); setDetalleEntrega(null); setErrDetalle(null);
     try {
       const data = await fetch(`${API}/api/ventas/${venta.id}`).then(r => r.json());
       setDetalleEntrega(data);
-    } catch { setErrDetalle('No se pudo cargar el detalle de la venta'); }
+    } catch { setErrDetalle('No se pudo cargar el detalle.'); }
     finally   { setCargandoDetalle(false); }
   };
 
@@ -274,33 +451,31 @@ export default function Vehiculos() {
       const res  = await fetch(`${API}/api/ventas/${detalleEntrega.id}/entregar`, { method: 'PUT' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
-      setDetalleEntrega(null);
-      cargarVehiculos(); cargarPendientes();
+      setDetalleEntrega(null); cargarVehiculos(); cargarPendientes();
     } catch (err) { setErrDetalle(err.message); }
     finally       { setMarcandoEntregada(false); }
   };
 
-  // ── Mantenimiento CRUD ─────────────────────────────────────────
+  /* ── Mantenimiento ───────────────────────────────────── */
   const abrirNuevoMant = () => {
     setFormMant({ ...FORM_MANT, fecha: new Date().toISOString().substring(0, 10) });
     setErrMant(null); setModalMant(true);
   };
-  const cerrarMant  = () => setModalMant(false);
   const cambiarMant = (campo, val) => setFormMant(f => ({ ...f, [campo]: val }));
 
   const guardarMant = async () => {
-    if (!vehSelMant)        { setErrMant('Seleccioná un vehículo'); return; }
-    if (!formMant.tipo)     { setErrMant('Seleccioná el tipo de mantenimiento'); return; }
+    if (!vehSelMant)    { setErrMant('Seleccioná un vehículo'); return; }
+    if (!formMant.tipo) { setErrMant('Seleccioná el tipo de mantenimiento'); return; }
     setGuardandoMant(true); setErrMant(null);
     const body = {
-      vehiculo_id:    parseInt(vehSelMant, 10),
-      tipo:           formMant.tipo,
-      descripcion:    formMant.descripcion.trim() || null,
-      fecha:          formMant.fecha || null,
-      costo:          formMant.costo ? parseFloat(formMant.costo) : null,
-      kilometraje:    formMant.kilometraje ? parseInt(formMant.kilometraje, 10) : null,
+      vehiculo_id:     parseInt(vehSelMant, 10),
+      tipo:            formMant.tipo,
+      descripcion:     formMant.descripcion.trim() || null,
+      fecha:           formMant.fecha || null,
+      costo:           formMant.costo ? parseFloat(formMant.costo) : null,
+      kilometraje:     formMant.kilometraje ? parseInt(formMant.kilometraje, 10) : null,
       proximo_service: formMant.proximo_service ? parseInt(formMant.proximo_service, 10) : null,
-      estado:         formMant.estado,
+      estado:          formMant.estado,
     };
     try {
       const res  = await fetch(`${API}/api/mantenimiento`, {
@@ -308,27 +483,28 @@ export default function Vehiculos() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
-      cerrarMant(); cargarHistorial(vehSelMant); cargarVehiculos();
+      setModalMant(false); cargarHistorial(vehSelMant); cargarVehiculos();
     } catch (err) { setErrMant(err.message); }
     finally       { setGuardandoMant(false); }
   };
 
-  const disponibles = vehiculos.filter(v => v.estado === 'Disponible');
-
-  // Vehículo seleccionado para mantenimiento
-  const vehMantObj = vehiculos.find(v => String(v.id) === String(vehSelMant));
-  const ultimoServiceKm = historial.find(h => h.proximo_service != null)?.proximo_service;
-  const kmActual = vehMantObj?.kilometraje_actual;
-  const alertaKm = kmActual != null && ultimoServiceKm != null && kmActual >= ultimoServiceKm;
+  /* ── Valores derivados ───────────────────────────────── */
+  const vehMantObj     = vehiculos.find(v => String(v.id) === String(vehSelMant));
+  const ultimoServKm   = historial.find(h => h.proximo_service != null)?.proximo_service;
+  const kmActual       = vehMantObj?.kilometraje_actual;
+  const alertaKm       = kmActual != null && ultimoServKm != null && kmActual >= ultimoServKm;
 
   if (cargando) return <p className="estado-carga">Cargando vehículos...</p>;
   if (error)    return <p className="estado-error">Error: {error}</p>;
 
+  /* ════════════════════════════════════════════════════════
+     RENDER
+  ════════════════════════════════════════════════════════ */
   return (
     <div>
       <div className="seccion-header">
         <h2>Logística</h2>
-        {tab === 'flota'        && <button className="btn-nuevo" onClick={abrirCrear}>+ Nuevo vehículo</button>}
+        {tab === 'flota'         && <button className="btn-nuevo" onClick={abrirCrear}>+ Nuevo vehículo</button>}
         {tab === 'mantenimiento' && vehSelMant && (
           <button className="btn-nuevo" onClick={abrirNuevoMant}>+ Registrar mantenimiento</button>
         )}
@@ -339,91 +515,57 @@ export default function Vehiculos() {
         <button className={`seccion-tab ${tab === 'mantenimiento' ? 'activo' : ''}`} onClick={() => setTab('mantenimiento')}>🔧 Mantenimiento</button>
       </div>
 
-      {/* ══ TAB: FLOTA ══════════════════════════════════════════════ */}
+      {/* ══ TAB FLOTA ════════════════════════════════════════ */}
       {tab === 'flota' && (
         <>
-          {vehiculos.length === 0 ? <p className="estado-carga">No hay vehículos registrados.</p> : (
-            <div className="tabla-wrapper">
-              <table>
-                <thead><tr>
-                  <th>Patente</th><th>Tipo</th><th>Marca / Modelo</th><th>Año</th><th>Km actual</th><th>Estado</th><th></th>
-                </tr></thead>
-                <tbody>
-                  {vehiculos.map(v => (
-                    <tr key={v.id}>
-                      <td><code style={{ fontWeight: 700, fontSize: 15, letterSpacing: 1 }}>{v.patente}</code></td>
-                      <td>{v.tipo ?? '—'}</td>
-                      <td>{[v.marca, v.modelo].filter(Boolean).join(' ') || '—'}</td>
-                      <td>{v.anio ?? '—'}</td>
-                      <td>{v.kilometraje_actual != null ? v.kilometraje_actual.toLocaleString('es-AR') + ' km' : '—'}</td>
-                      <td><span className="badge" style={ESTADO_ESTILO[v.estado] ?? ESTADO_ESTILO['Disponible']}>{v.estado}</span></td>
-                      <td style={{ display: 'flex', gap: 6 }}>
-                        <button className="btn-editar" onClick={() => abrirEditar(v)}>Editar</button>
-                        {v.estado === 'En reparto' && (
-                          <button className="btn-editar"
-                            style={{ background: '#e6f9f0', color: '#1a8a4a', borderColor: 'rgba(39,174,96,0.3)' }}
-                            onClick={() => liberar(v.id)}>✓ Liberar</button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* Panel de entregas pendientes */}
-          <div style={{ marginTop: 32 }}>
-            <h3 style={{ fontSize: 15, fontWeight: 800, color: 'var(--texto)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span>Entregas domicilio pendientes</span>
-              {pendientes.length > 0 && (
-                <span style={{ background: 'var(--rojo-fondo)', color: 'var(--rojo)', borderRadius: 20, padding: '2px 10px', fontSize: 12, fontWeight: 700 }}>
-                  {pendientes.length}
-                </span>
-              )}
-            </h3>
-            {cargandoDetalle && <p className="estado-carga">Cargando detalle...</p>}
-            {pendientes.length === 0 ? <p className="estado-carga">No hay entregas pendientes. ✓</p> : (
+          {vehiculos.length === 0
+            ? <p className="estado-carga">No hay vehículos registrados.</p>
+            : (
               <div className="tabla-wrapper">
                 <table>
                   <thead><tr>
-                    <th>N° Venta</th><th>Fecha</th><th>Cliente</th><th>Dirección de entrega</th><th style={{ textAlign: 'right' }}>Total</th><th>Acciones</th>
+                    <th>Patente</th><th>Tipo</th><th>Marca / Modelo</th><th>Año</th>
+                    <th>Km actual</th><th>Estado</th><th>Entregas</th><th></th>
                   </tr></thead>
                   <tbody>
-                    {pendientes.map(v => (
+                    {vehiculos.map(v => (
                       <tr key={v.id}>
-                        <td><code>#{String(v.id).padStart(4, '0')}</code></td>
-                        <td style={{ whiteSpace: 'nowrap' }}>{formatFechaCorta(v.fecha)}</td>
-                        <td>{v.cliente ?? 'Consumidor final'}</td>
-                        <td><strong style={{ color: 'var(--naranja-oscuro)' }}>📍 {v.direccion_entrega ?? '—'}</strong></td>
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>${fmt(v.total)}</td>
+                        <td><code style={{ fontWeight: 700, fontSize: 15, letterSpacing: 1 }}>{v.patente}</code></td>
+                        <td>{v.tipo ?? '—'}</td>
+                        <td>{[v.marca, v.modelo].filter(Boolean).join(' ') || '—'}</td>
+                        <td>{v.anio ?? '—'}</td>
+                        <td>{v.kilometraje_actual != null ? v.kilometraje_actual.toLocaleString('es-AR') + ' km' : '—'}</td>
+                        <td><span className="badge" style={ESTADO_ESTILO[v.estado] ?? ESTADO_ESTILO['Disponible']}>{v.estado}</span></td>
                         <td>
-                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                            <button className="btn-editar"
-                              style={{ background: '#f0f4ff', color: '#3730a3', borderColor: 'rgba(55,48,163,0.25)' }}
-                              onClick={() => verDetalle(v)}>🔍 Detalle</button>
-                            {v.direccion_entrega && (
+                          {v.entregas_pendientes > 0
+                            ? <span className="badge" style={{ background: '#eef2ff', color: '#3730a3', border: '1px solid rgba(55,48,163,0.2)' }}>
+                                {v.entregas_pendientes} pendiente{v.entregas_pendientes !== 1 ? 's' : ''}
+                              </span>
+                            : <span style={{ color: 'var(--texto-suave)', fontSize: 13 }}>—</span>}
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            <button className="btn-editar" onClick={() => abrirEditar(v)}>Editar</button>
+                            {v.estado !== 'En mantenimiento' && (
+                              <button className="btn-editar"
+                                style={{ background: '#fff7ed', color: '#c2410c', borderColor: 'rgba(249,115,22,0.3)' }}
+                                onClick={() => abrirAsignar(v)}>
+                                📦 Asignar entregas
+                              </button>
+                            )}
+                            {v.entregas_pendientes > 0 && (
                               <button className="btn-editar"
                                 style={{ background: '#f0fdf4', color: '#15803d', borderColor: 'rgba(21,128,61,0.25)' }}
-                                onClick={() => setVentaMapa(v)}>🗺 Ver ruta</button>
+                                onClick={() => abrirRuta(v)}>
+                                🗺 Ver ruta
+                              </button>
                             )}
-                            {asignando === v.id ? (
-                              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                                <select value={vehAsignar} onChange={e => setVehAsignar(e.target.value)}
-                                  style={{ padding: '5px 8px', borderRadius: 6, border: '1.5px solid var(--borde)', fontSize: 13 }}>
-                                  <option value="">-- Vehículo --</option>
-                                  {disponibles.map(veh => <option key={veh.id} value={veh.id}>{veh.patente}{veh.marca ? ` — ${veh.marca}` : ''}</option>)}
-                                </select>
-                                <button className="btn btn-primary" style={{ fontSize: 12, padding: '5px 12px' }} onClick={() => confirmarAsignar(v.id)}>OK</button>
-                                <button className="btn btn-secundario" style={{ fontSize: 12, padding: '5px 10px' }} onClick={() => { setAsignando(null); setVehAsignar(''); setErrAsignar(null); }}>✕</button>
-                                {errAsignar && <span className="error-msg" style={{ fontSize: 12 }}>{errAsignar}</span>}
-                              </div>
-                            ) : (
+                            {v.estado === 'En reparto' && (
                               <button className="btn-editar"
-                                style={disponibles.length === 0 ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
-                                onClick={() => disponibles.length > 0 && setAsignando(v.id)}
-                                title={disponibles.length === 0 ? 'No hay vehículos disponibles' : 'Asignar vehículo'}
-                              >🚚 Asignar</button>
+                                style={{ background: '#dcfce7', color: '#166534', borderColor: 'rgba(22,101,52,0.25)' }}
+                                onClick={() => liberar(v.id)}>
+                                ✓ Liberar
+                              </button>
                             )}
                           </div>
                         </td>
@@ -433,14 +575,55 @@ export default function Vehiculos() {
                 </table>
               </div>
             )}
+
+          {/* Panel entregas sin asignar */}
+          <div style={{ marginTop: 36 }}>
+            <h3 style={{ fontSize: 15, fontWeight: 800, color: 'var(--texto)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
+              Entregas domicilio sin asignar
+              {pendientes.length > 0 && (
+                <span style={{ background: 'var(--rojo-fondo)', color: 'var(--rojo)', borderRadius: 20, padding: '2px 10px', fontSize: 12, fontWeight: 700 }}>
+                  {pendientes.length}
+                </span>
+              )}
+            </h3>
+            {pendientes.length === 0
+              ? <p className="estado-carga">No hay entregas pendientes sin asignar. ✓</p>
+              : (
+                <div className="tabla-wrapper">
+                  <table>
+                    <thead><tr>
+                      <th>N° Venta</th><th>Fecha</th><th>Cliente</th><th>Dirección de entrega</th>
+                      <th style={{ textAlign: 'right' }}>Total</th><th>Acciones</th>
+                    </tr></thead>
+                    <tbody>
+                      {pendientes.map(v => (
+                        <tr key={v.id}>
+                          <td><code>#{String(v.id).padStart(4, '0')}</code></td>
+                          <td style={{ whiteSpace: 'nowrap' }}>{fechaCorta(v.fecha)}</td>
+                          <td>{v.cliente ?? 'Consumidor final'}</td>
+                          <td><strong style={{ color: 'var(--naranja-oscuro)' }}>📍 {v.direccion_entrega ?? '—'}</strong></td>
+                          <td style={{ textAlign: 'right', fontWeight: 700 }}>${fmt(v.total)}</td>
+                          <td>
+                            <button className="btn-editar"
+                              style={{ background: '#f0f4ff', color: '#3730a3', borderColor: 'rgba(55,48,163,0.25)' }}
+                              onClick={() => verDetalle(v)}>
+                              🔍 Detalle
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            {cargandoDetalle && <p className="estado-carga">Cargando detalle...</p>}
           </div>
         </>
       )}
 
-      {/* ══ TAB: MANTENIMIENTO ══════════════════════════════════════ */}
+      {/* ══ TAB MANTENIMIENTO ════════════════════════════════ */}
       {tab === 'mantenimiento' && (
         <>
-          {/* Selector de vehículo */}
           <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end', marginBottom: 24, flexWrap: 'wrap' }}>
             <div className="form-group" style={{ marginBottom: 0, minWidth: 260 }}>
               <label>Vehículo</label>
@@ -460,14 +643,13 @@ export default function Vehiculos() {
             )}
           </div>
 
-          {/* Alerta km service */}
           {alertaKm && (
-            <div style={{ background: '#FEF9E7', border: '2px solid rgba(184,138,0,0.35)', borderRadius: 'var(--radio)', padding: '12px 18px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ background: '#fef9c3', border: '2px solid rgba(184,138,0,0.35)', borderRadius: 'var(--radio)', padding: '12px 18px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{ fontSize: 22 }}>⚠</span>
               <div>
-                <p style={{ fontWeight: 800, color: '#B7770D', margin: 0 }}>Service vencido</p>
-                <p style={{ fontSize: 13, color: '#B7770D', margin: 0 }}>
-                  El vehículo tiene {kmActual.toLocaleString('es-AR')} km y el próximo service estaba previsto a los {ultimoServiceKm.toLocaleString('es-AR')} km.
+                <p style={{ fontWeight: 800, color: '#854d0e', margin: 0 }}>Service vencido</p>
+                <p style={{ fontSize: 13, color: '#854d0e', margin: 0 }}>
+                  El vehículo tiene {kmActual.toLocaleString('es-AR')} km y el próximo service estaba previsto a los {ultimoServKm.toLocaleString('es-AR')} km.
                 </p>
               </div>
             </div>
@@ -485,20 +667,20 @@ export default function Vehiculos() {
                 <thead><tr>
                   <th>Fecha</th><th>Tipo</th><th>Descripción</th>
                   <th style={{ textAlign: 'right' }}>Km</th>
-                  <th style={{ textAlign: 'right' }}>Prox. service (km)</th>
+                  <th style={{ textAlign: 'right' }}>Próx. service (km)</th>
                   <th style={{ textAlign: 'right' }}>Costo</th>
                   <th>Estado</th>
                 </tr></thead>
                 <tbody>
                   {historial.map(h => (
                     <tr key={h.id}>
-                      <td style={{ whiteSpace: 'nowrap' }}>{formatFechaCorta(h.fecha)}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{fechaCorta(h.fecha)}</td>
                       <td><strong>{h.tipo}</strong></td>
                       <td style={{ fontSize: 13, color: 'var(--texto-suave)' }}>{h.descripcion ?? '—'}</td>
                       <td style={{ textAlign: 'right' }}>{h.kilometraje != null ? h.kilometraje.toLocaleString('es-AR') : '—'}</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{h.proximo_service != null ? h.proximo_service.toLocaleString('es-AR') : '—'}</td>
                       <td style={{ textAlign: 'right' }}>{h.costo != null ? `$${fmt(h.costo)}` : '—'}</td>
-                      <td><span className="badge" style={{ background: '#e6f9f0', color: '#1a8a4a' }}>{h.estado}</span></td>
+                      <td><span className="badge" style={{ background: '#dcfce7', color: '#166534' }}>{h.estado}</span></td>
                     </tr>
                   ))}
                 </tbody>
@@ -508,9 +690,9 @@ export default function Vehiculos() {
         </>
       )}
 
-      {/* ── Modal crear vehículo ───────────────────────────────────── */}
-      {modalAbierto && (
-        <Modal titulo={esEdicion ? `Editar — ${form.patente}` : 'Nuevo vehículo'} onCerrar={cerrar} ancho={520}>
+      {/* ══ MODAL: CRUD VEHÍCULO ═════════════════════════════ */}
+      {modalVeh && (
+        <Modal titulo={esEdicion ? `Editar — ${form.patente}` : 'Nuevo vehículo'} onCerrar={() => setModalVeh(false)} ancho={520}>
           <div className="form-grid">
             {!esEdicion && (
               <div className="form-group span-2">
@@ -520,40 +702,29 @@ export default function Vehiculos() {
                   style={{ textTransform: 'uppercase', letterSpacing: 2, fontWeight: 700 }} />
               </div>
             )}
-            <div className="form-group">
-              <label>Tipo</label>
-              <input value={form.tipo} onChange={e => cambiar('tipo', e.target.value)} placeholder="Ej: Camión, Utilitario" />
-            </div>
-            <div className="form-group">
-              <label>Año</label>
+            <div className="form-group"><label>Tipo</label>
+              <input value={form.tipo} onChange={e => cambiar('tipo', e.target.value)} placeholder="Ej: Camión, Utilitario" /></div>
+            <div className="form-group"><label>Año</label>
               <input type="number" value={form.anio} onChange={e => cambiar('anio', e.target.value)}
-                placeholder="Ej: 2018" min={1980} max={new Date().getFullYear() + 1} />
-            </div>
-            <div className="form-group">
-              <label>Marca</label>
-              <input value={form.marca} onChange={e => cambiar('marca', e.target.value)} placeholder="Ej: Ford" />
-            </div>
-            <div className="form-group">
-              <label>Modelo</label>
-              <input value={form.modelo} onChange={e => cambiar('modelo', e.target.value)} placeholder="Ej: Transit" />
-            </div>
-            <div className="form-group">
-              <label>Km actual</label>
+                placeholder="Ej: 2018" min={1980} max={new Date().getFullYear() + 1} /></div>
+            <div className="form-group"><label>Marca</label>
+              <input value={form.marca} onChange={e => cambiar('marca', e.target.value)} placeholder="Ej: Ford" /></div>
+            <div className="form-group"><label>Modelo</label>
+              <input value={form.modelo} onChange={e => cambiar('modelo', e.target.value)} placeholder="Ej: Transit" /></div>
+            <div className="form-group"><label>Km actual</label>
               <input type="number" min="0" value={form.kilometraje_actual}
-                onChange={e => cambiar('kilometraje_actual', e.target.value)} placeholder="Ej: 85000" />
-            </div>
+                onChange={e => cambiar('kilometraje_actual', e.target.value)} placeholder="Ej: 85000" /></div>
             {esEdicion && (
-              <div className="form-group">
-                <label>Estado</label>
+              <div className="form-group"><label>Estado</label>
                 <select value={form.estado} onChange={e => cambiar('estado', e.target.value)}>
                   {ESTADOS_VEH.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
             )}
           </div>
-          {errGuardado && <p className="error-msg" style={{ marginTop: 14 }}>Error: {errGuardado}</p>}
+          {errVeh && <p className="error-msg" style={{ marginTop: 14 }}>Error: {errVeh}</p>}
           <div className="modal-footer">
-            <button className="btn btn-secundario" onClick={cerrar}>Cancelar</button>
+            <button className="btn btn-secundario" onClick={() => setModalVeh(false)}>Cancelar</button>
             <button className="btn btn-primary" onClick={guardar} disabled={guardando}>
               {guardando ? 'Guardando...' : 'Guardar'}
             </button>
@@ -561,50 +732,206 @@ export default function Vehiculos() {
         </Modal>
       )}
 
-      {/* ── Modal nuevo mantenimiento ──────────────────────────────── */}
+      {/* ══ MODAL: ASIGNAR ENTREGAS ══════════════════════════ */}
+      {modalAsignar && (
+        <Modal titulo={`Asignar entregas — ${modalAsignar.patente}`} onCerrar={() => setModalAsignar(null)} ancho={740}>
+          <p style={{ fontSize: 13, color: 'var(--texto-suave)', marginBottom: 16 }}>
+            Seleccioná las ventas a domicilio que llevará este vehículo en el próximo viaje.
+          </p>
+
+          {pendientes.length === 0 ? (
+            <p className="estado-carga">No hay entregas pendientes sin asignar.</p>
+          ) : (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                  <input type="checkbox"
+                    checked={pendientes.length > 0 && pendientes.every(p => seleccionadas.has(p.id))}
+                    onChange={selAll} />
+                  Seleccionar todas ({pendientes.length})
+                </label>
+                {seleccionadas.size > 0 && (
+                  <span style={{ fontSize: 12, color: 'var(--naranja)', fontWeight: 700 }}>
+                    {seleccionadas.size} seleccionada{seleccionadas.size !== 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 420, overflowY: 'auto' }}>
+                {pendientes.map(v => (
+                  <label key={v.id}
+                    style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 12, cursor: 'pointer',
+                      padding: '12px 14px', borderRadius: 'var(--radio)',
+                      border: `2px solid ${seleccionadas.has(v.id) ? 'rgba(249,115,22,0.4)' : 'var(--borde)'}`,
+                      background: seleccionadas.has(v.id) ? 'var(--naranja-claro)' : 'var(--blanco)',
+                      transition: 'border-color 0.15s, background 0.15s',
+                    }}>
+                    <input type="checkbox"
+                      checked={seleccionadas.has(v.id)}
+                      onChange={() => toggleSel(v.id)}
+                      style={{ marginTop: 3, flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <code style={{ fontSize: 13, fontWeight: 700 }}>#{String(v.id).padStart(4, '0')}</code>
+                        <span style={{ fontWeight: 600, fontSize: 14 }}>{v.cliente ?? 'Consumidor final'}</span>
+                        <span style={{ fontSize: 12, color: 'var(--texto-suave)' }}>{fechaCorta(v.fecha)}</span>
+                        <span style={{ marginLeft: 'auto', fontWeight: 700, color: 'var(--verde)', fontSize: 14 }}>${fmt(v.total)}</span>
+                      </div>
+                      <div style={{ fontSize: 13, color: 'var(--naranja-oscuro)', marginTop: 4, fontWeight: 600 }}>
+                        📍 {v.direccion_entrega}
+                      </div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+
+          {errAsignar && <p className="error-msg" style={{ marginTop: 12 }}>{errAsignar}</p>}
+          <div className="modal-footer">
+            <button className="btn btn-secundario" onClick={() => setModalAsignar(null)}>Cancelar</button>
+            <button className="btn btn-primary"
+              onClick={confirmarAsignacion}
+              disabled={seleccionadas.size === 0 || asignando}>
+              {asignando
+                ? 'Asignando...'
+                : `Asignar ${seleccionadas.size || ''} entrega${seleccionadas.size !== 1 ? 's' : ''} a ${modalAsignar.patente}`}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ MODAL: RUTA OPTIMIZADA ═══════════════════════════ */}
+      {modalRuta && (
+        <Modal
+          titulo={`Ruta optimizada — ${modalRuta.patente}${modalRuta.marca ? ` · ${modalRuta.marca}` : ''}`}
+          onCerrar={() => { setModalRuta(null); setRutaData(null); setErrRuta(''); }}
+          ancho={860}
+        >
+          {calculandoRuta && (
+            <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>🗺</div>
+              <p style={{ color: 'var(--texto-suave)', fontSize: 15 }}>Geocodificando direcciones y optimizando ruta...</p>
+            </div>
+          )}
+
+          {errRuta && !calculandoRuta && (
+            <p className="estado-error" style={{ marginBottom: 16 }}>{errRuta}</p>
+          )}
+
+          {rutaData && !calculandoRuta && (
+            <>
+              <MapaMultiRuta key={modalRuta.id} paradas={rutaData.paradasOrdenadas} rutaGeoJSON={rutaData.rutaGeoJSON} />
+
+              {/* Lista de paradas */}
+              <div style={{ marginTop: 18 }}>
+                {rutaData.paradasOrdenadas.map((p, i) => (
+                  <div key={p.id} style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 12,
+                    padding: '12px 4px', borderBottom: '1px solid var(--borde)',
+                  }}>
+                    <div style={{
+                      width: 28, height: 28, background: '#f97316', color: 'white',
+                      borderRadius: '50%', display: 'flex', alignItems: 'center',
+                      justifyContent: 'center', fontWeight: 800, fontSize: 13, flexShrink: 0,
+                    }}>{i + 1}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{p.cliente ?? 'Sin cliente'}</div>
+                      <div style={{ fontSize: 13, color: 'var(--naranja-oscuro)', marginTop: 2 }}>📍 {p.direccion_entrega}</div>
+                      {p.items?.length > 0 && (
+                        <div style={{ fontSize: 12, color: 'var(--texto-suave)', marginTop: 4 }}>
+                          {p.items.map(it => `${it.producto} x${parseFloat(it.cantidad).toLocaleString('es-AR')}`).join(' · ')}
+                        </div>
+                      )}
+                    </div>
+                    {(p.distKm || p.durMin) && (
+                      <div style={{ textAlign: 'right', flexShrink: 0, fontSize: 13 }}>
+                        {p.distKm && <div style={{ color: '#1d4ed8', fontWeight: 600 }}>📍 {p.distKm} km</div>}
+                        {p.durMin && <div style={{ color: '#15803d', fontWeight: 600 }}>🕐 ~{p.durMin} min</div>}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Totales */}
+              <div style={{
+                display: 'flex', gap: 24, marginTop: 14, padding: '12px 20px',
+                background: '#1e2939', borderRadius: 10, color: 'white', flexWrap: 'wrap',
+              }}>
+                <span>Paradas: <strong>{rutaData.paradasOrdenadas.length}</strong></span>
+                <span>Distancia total: <strong>{rutaData.totalKm} km</strong></span>
+                <span>Tiempo estimado: <strong>~{rutaData.totalMin} min</strong></span>
+              </div>
+
+              {/* Hoja de ruta imprimible (oculta normalmente) */}
+              <HojaRutaImprimible
+                vehiculo={modalRuta}
+                paradas={rutaData.paradasOrdenadas}
+                totalKm={rutaData.totalKm}
+                totalMin={rutaData.totalMin}
+              />
+            </>
+          )}
+
+          <div className="modal-footer">
+            <button className="btn btn-secundario"
+              onClick={() => { setModalRuta(null); setRutaData(null); setErrRuta(''); }}>
+              Cerrar
+            </button>
+            {rutaData && !calculandoRuta && (
+              <>
+                <button className="btn btn-secundario" onClick={imprimirHojaRuta}>
+                  🖨 Imprimir hoja de ruta
+                </button>
+                <button className="btn btn-primary"
+                  style={{ background: 'var(--verde)', boxShadow: '0 4px 12px rgba(16,185,129,0.35)' }}
+                  onClick={handleEntregarTodas}
+                  disabled={entregandoTodas}>
+                  {entregandoTodas ? 'Marcando...' : '✓ Marcar todas como entregadas'}
+                </button>
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ MODAL: NUEVO MANTENIMIENTO ═══════════════════════ */}
       {modalMant && (
-        <Modal titulo="Registrar mantenimiento" onCerrar={cerrarMant} ancho={560}>
+        <Modal titulo="Registrar mantenimiento" onCerrar={() => setModalMant(false)} ancho={560}>
           {vehMantObj && (
             <p style={{ fontSize: 13, color: 'var(--texto-suave)', marginBottom: 16 }}>
-              Vehículo: <strong style={{ color: 'var(--texto)' }}>{vehMantObj.patente}{vehMantObj.marca ? ` — ${vehMantObj.marca} ${vehMantObj.modelo ?? ''}` : ''}</strong>
+              Vehículo: <strong style={{ color: 'var(--texto)' }}>
+                {vehMantObj.patente}{vehMantObj.marca ? ` — ${vehMantObj.marca} ${vehMantObj.modelo ?? ''}` : ''}
+              </strong>
             </p>
           )}
           <div className="form-grid">
-            <div className="form-group">
-              <label>Tipo *</label>
+            <div className="form-group"><label>Tipo *</label>
               <select value={formMant.tipo} onChange={e => cambiarMant('tipo', e.target.value)}>
                 <option value="">— Seleccioná —</option>
                 {TIPOS_MANT.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
-            <div className="form-group">
-              <label>Fecha</label>
-              <input type="date" value={formMant.fecha} onChange={e => cambiarMant('fecha', e.target.value)} />
-            </div>
-            <div className="form-group span-2">
-              <label>Descripción</label>
+            <div className="form-group"><label>Fecha</label>
+              <input type="date" value={formMant.fecha} onChange={e => cambiarMant('fecha', e.target.value)} /></div>
+            <div className="form-group span-2"><label>Descripción</label>
               <input value={formMant.descripcion} onChange={e => cambiarMant('descripcion', e.target.value)}
-                placeholder="Detalles del servicio / reparación" />
-            </div>
-            <div className="form-group">
-              <label>Costo ($)</label>
+                placeholder="Detalles del servicio / reparación" /></div>
+            <div className="form-group"><label>Costo ($)</label>
               <input type="number" min="0" step="0.01" value={formMant.costo}
-                onChange={e => cambiarMant('costo', e.target.value)} placeholder="0.00" />
-            </div>
-            <div className="form-group">
-              <label>Kilometraje al realizar</label>
+                onChange={e => cambiarMant('costo', e.target.value)} placeholder="0.00" /></div>
+            <div className="form-group"><label>Kilometraje al realizar</label>
               <input type="number" min="0" value={formMant.kilometraje}
-                onChange={e => cambiarMant('kilometraje', e.target.value)} placeholder="Ej: 85000" />
-            </div>
-            <div className="form-group span-2">
-              <label>Próximo service (km)</label>
+                onChange={e => cambiarMant('kilometraje', e.target.value)} placeholder="Ej: 85000" /></div>
+            <div className="form-group span-2"><label>Próximo service (km)</label>
               <input type="number" min="0" value={formMant.proximo_service}
-                onChange={e => cambiarMant('proximo_service', e.target.value)} placeholder="Ej: 95000" />
-            </div>
+                onChange={e => cambiarMant('proximo_service', e.target.value)} placeholder="Ej: 95000" /></div>
           </div>
           {errMant && <p className="error-msg" style={{ marginTop: 14 }}>Error: {errMant}</p>}
           <div className="modal-footer">
-            <button className="btn btn-secundario" onClick={cerrarMant}>Cancelar</button>
+            <button className="btn btn-secundario" onClick={() => setModalMant(false)}>Cancelar</button>
             <button className="btn btn-primary" onClick={guardarMant} disabled={guardandoMant}>
               {guardandoMant ? 'Guardando...' : 'Guardar'}
             </button>
@@ -612,50 +939,27 @@ export default function Vehiculos() {
         </Modal>
       )}
 
-      {/* ── Modal mapa de ruta ────────────────────────────────────── */}
-      {ventaMapa && (
-        <Modal
-          titulo={`Ruta — ${ventaMapa.cliente ?? 'Consumidor final'} · ${ventaMapa.direccion_entrega}`}
-          onCerrar={() => setVentaMapa(null)}
-          ancho={700}
-        >
-          <MapaRuta key={ventaMapa.id} direccion={ventaMapa.direccion_entrega} />
-          <div className="modal-footer">
-            <button className="btn btn-secundario" onClick={() => setVentaMapa(null)}>Cerrar</button>
-          </div>
-        </Modal>
-      )}
-
-      {/* ── Modal detalle de entrega ───────────────────────────────── */}
+      {/* ══ MODAL: DETALLE DE ENTREGA INDIVIDUAL ════════════ */}
       {detalleEntrega && (
-        <Modal titulo={`Detalle entrega — Venta #${String(detalleEntrega.id).padStart(4, '0')}`}
-          onCerrar={() => { setDetalleEntrega(null); setErrDetalle(null); }} ancho={620}>
+        <Modal
+          titulo={`Detalle entrega — Venta #${String(detalleEntrega.id).padStart(4, '0')}`}
+          onCerrar={() => { setDetalleEntrega(null); setErrDetalle(null); }}
+          ancho={620}
+        >
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 24px', marginBottom: 20 }}>
-            <div>
-              <span className="comp-label">Fecha de venta</span>
-              <span className="comp-valor">{formatFecha(detalleEntrega.fecha)}</span>
-            </div>
-            <div>
-              <span className="comp-label">Total</span>
-              <span className="comp-valor" style={{ fontWeight: 800, fontSize: 17, color: 'var(--naranja-oscuro)' }}>${fmt(detalleEntrega.total)}</span>
-            </div>
-            <div>
-              <span className="comp-label">Cliente</span>
-              <span className="comp-valor">{detalleEntrega.cliente ?? 'Consumidor final'}</span>
-            </div>
+            <div><span className="comp-label">Fecha de venta</span><span className="comp-valor">{fechaLarga(detalleEntrega.fecha)}</span></div>
+            <div><span className="comp-label">Total</span><span className="comp-valor" style={{ fontWeight: 800, fontSize: 17, color: 'var(--naranja-oscuro)' }}>${fmt(detalleEntrega.total)}</span></div>
+            <div><span className="comp-label">Cliente</span><span className="comp-valor">{detalleEntrega.cliente ?? 'Consumidor final'}</span></div>
             {detalleEntrega.cliente_telefono && (
-              <div>
-                <span className="comp-label">Teléfono</span>
-                <span className="comp-valor">{detalleEntrega.cliente_telefono}</span>
-              </div>
+              <div><span className="comp-label">Teléfono</span><span className="comp-valor">{detalleEntrega.cliente_telefono}</span></div>
             )}
           </div>
-          <div style={{ background: 'var(--naranja-claro)', border: '2px solid rgba(230,126,34,0.35)', borderRadius: 'var(--radio)', padding: '14px 18px', marginBottom: 20 }}>
+          <div style={{ background: 'var(--naranja-claro)', border: '2px solid rgba(249,115,22,0.35)', borderRadius: 'var(--radio)', padding: '14px 18px', marginBottom: 20 }}>
             <p style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, color: 'var(--naranja-oscuro)', marginBottom: 4 }}>📍 Dirección de entrega</p>
             <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--texto)', margin: 0 }}>{detalleEntrega.direccion_entrega ?? '—'}</p>
           </div>
           <p className="form-section-titulo">Productos a entregar</p>
-          {(!detalleEntrega.items || detalleEntrega.items.length === 0) ? <p className="estado-carga">Sin items registrados.</p> : (
+          {(!detalleEntrega.items?.length) ? <p className="estado-carga">Sin items.</p> : (
             <div className="tabla-wrapper" style={{ marginBottom: 20 }}>
               <table>
                 <thead><tr><th>Producto</th><th style={{ textAlign: 'right' }}>Cantidad</th><th style={{ textAlign: 'right' }}>Subtotal</th></tr></thead>
@@ -674,7 +978,8 @@ export default function Vehiculos() {
           {errDetalle && <p className="error-msg" style={{ marginBottom: 12 }}>{errDetalle}</p>}
           <div className="modal-footer">
             <button className="btn btn-secundario" onClick={() => { setDetalleEntrega(null); setErrDetalle(null); }}>Cerrar</button>
-            <button className="btn btn-primary" style={{ background: 'var(--verde)', boxShadow: '0 4px 12px rgba(39,174,96,0.35)' }}
+            <button className="btn btn-primary"
+              style={{ background: 'var(--verde)', boxShadow: '0 4px 12px rgba(16,185,129,0.35)' }}
               onClick={marcarEntregada} disabled={marcandoEntregada}>
               {marcandoEntregada ? 'Registrando...' : '✓ Marcar como entregado'}
             </button>
