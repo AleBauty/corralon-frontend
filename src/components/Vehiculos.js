@@ -273,12 +273,12 @@ export default function Vehiculos() {
   };
 
   const liberar = async id => {
-    if (!window.confirm('¿Marcar el vehículo como Disponible?')) return;
+    if (!window.confirm('¿Liberar vehículo? Se marcarán todas sus entregas pendientes como entregadas.')) return;
     try {
       const res  = await fetch(`${API}/api/vehiculos/${id}/liberar`, { method: 'PUT' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      cargarVehiculos();
+      cargarVehiculos(); cargarPendientes();
     } catch (err) { alert('Error: ' + err.message); }
   };
 
@@ -321,19 +321,25 @@ export default function Vehiculos() {
 
   /* ── Ruta optimizada ─────────────────────────────────── */
   const calcularRuta = async (entregas) => {
-    const conDireccion = entregas.filter(e => e.direccion_entrega);
+    const conDireccion = entregas.filter(e => e.direccion_calle || e.direccion_entrega);
     if (!conDireccion.length) throw new Error('Ninguna entrega tiene dirección de domicilio registrada.');
 
-    // 1. Geocodificar
+    // 1. Geocodificar con campos separados; si no existen, caer en campo legacy
     const geoParadas = [];
     for (const p of conDireccion) {
+      const calle  = p.direccion_calle?.trim() || '';
+      const nro    = p.direccion_nro?.trim()   || '';
+      const ciudad = p.direccion_ciudad?.trim() || 'El Carmen';
+      const texto  = calle
+        ? `${calle}${nro ? ' ' + nro : ''}, ${ciudad}, Jujuy, Argentina`
+        : `${p.direccion_entrega}, Jujuy, Argentina`;
+
       const res  = await fetch(
         `https://api.openrouteservice.org/geocode/search?api_key=${ORS_KEY}` +
-        `&text=${encodeURIComponent(p.direccion_entrega + ', El Carmen, Jujuy, Argentina')}` +
-        `&boundary.country=AR&size=1`
+        `&text=${encodeURIComponent(texto)}&boundary.country=AR&size=1`
       );
       const data = await res.json();
-      if (!data.features?.length) throw new Error(`No se pudo geocodificar: "${p.direccion_entrega}"`);
+      if (!data.features?.length) throw new Error(`No se pudo geocodificar: "${texto}"`);
       const [lng, lat] = data.features[0].geometry.coordinates;
       geoParadas.push({ ...p, lng, lat });
     }

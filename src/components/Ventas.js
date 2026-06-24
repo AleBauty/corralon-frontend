@@ -40,7 +40,10 @@ export default function Ventas() {
   const [todosProductos, setTodosProductos] = useState([]);
   const [dniCliente, setDniCliente]         = useState('');
   const [formaEntrega, setFormaEntrega]     = useState('Depósito');
-  const [direccionEntrega, setDireccionEntrega] = useState('');
+  const [direccionCalle, setDireccionCalle] = useState('');
+  const [direccionNro, setDireccionNro]     = useState('');
+  const [direccionCiudad, setDireccionCiudad] = useState('El Carmen');
+  const [descuento, setDescuento]           = useState('');
   const [observaciones, setObservaciones]   = useState('');
   const [items, setItems]                   = useState([]);
   const [busquedaProd, setBusquedaProd]     = useState('');
@@ -82,11 +85,11 @@ export default function Ventas() {
     return () => document.removeEventListener('mousedown', fn);
   }, []);
 
-  // Auto-completar dirección
+  // Auto-completar dirección desde el domicilio del cliente
   useEffect(() => {
-    if (!dniCliente) { setDireccionEntrega(''); return; }
+    if (!dniCliente) { setDireccionCalle(''); setDireccionNro(''); setDireccionCiudad('El Carmen'); return; }
     const cli = clientes.find(c => c.dni === dniCliente);
-    if (cli?.domicilio) setDireccionEntrega(cli.domicilio);
+    if (cli?.domicilio) setDireccionCalle(cli.domicilio);
   }, [dniCliente, clientes]);
 
   // Fetch saldo CC
@@ -101,7 +104,10 @@ export default function Ventas() {
       .catch(() => setInfoCC(null));
   }, [dniCliente, formaPago1, formaPago2, usarDosFormas, clientes]);
 
-  const totalVenta = useMemo(() => items.reduce((acc, i) => acc + i.subtotal, 0), [items]);
+  const subtotalVenta  = useMemo(() => items.reduce((acc, i) => acc + i.subtotal, 0), [items]);
+  const descuentoPct   = parseFloat(descuento) || 0;
+  const montoDescuento = subtotalVenta * descuentoPct / 100;
+  const totalVenta     = subtotalVenta - montoDescuento;
 
   // Auto-fill montoPago1 con el total cuando es pago simple
   useEffect(() => {
@@ -164,8 +170,8 @@ export default function Ventas() {
       : null
     : null;
 
-  const errDireccion = formaEntrega === 'Domicilio' && !direccionEntrega.trim()
-    ? 'La dirección de entrega es obligatoria'
+  const errDireccion = formaEntrega === 'Domicilio' && !direccionCalle.trim()
+    ? 'La calle de entrega es obligatoria'
     : null;
 
   const puedeGuardar = items.length > 0 && !errDireccion && !errCC && !errSplit && !excedeLimite
@@ -182,7 +188,8 @@ export default function Ventas() {
     setModalVenta(false); setItems([]); setDniCliente('');
     setFormaPago1('Efectivo'); setUsarDosFormas(false); setFormaPago2('Transferencia');
     setMontoPago1(''); setMontoPago2('');
-    setFormaEntrega('Depósito'); setDireccionEntrega(''); setObservaciones('');
+    setFormaEntrega('Depósito'); setDireccionCalle(''); setDireccionNro(''); setDireccionCiudad('El Carmen');
+    setDescuento(''); setObservaciones('');
     setBusquedaProd(''); setProdSel(null); setCantInput(''); setErrorGuardado(null);
     setInfoCC(null);
   };
@@ -221,7 +228,10 @@ export default function Ventas() {
       const body = {
         dni_cliente:       dniCliente || null,
         forma_entrega:     formaEntrega,
-        direccion_entrega: formaEntrega === 'Domicilio' ? direccionEntrega.trim() : null,
+        direccion_calle:   formaEntrega === 'Domicilio' ? direccionCalle.trim() : null,
+        direccion_nro:     formaEntrega === 'Domicilio' ? direccionNro.trim() || null : null,
+        direccion_ciudad:  formaEntrega === 'Domicilio' ? (direccionCiudad.trim() || 'El Carmen') : null,
+        descuento:         descuentoPct || null,
         observaciones:     observaciones.trim() || null,
         items:             items.map(i => ({ producto_codigo: i.producto_codigo, cantidad: i.cantidad, precio_unitario: i.precio_unitario })),
         forma_pago_1:      formaPago1,
@@ -470,9 +480,28 @@ export default function Ventas() {
                   </tbody>
                 </table>
               </div>
-              <div className="venta-total-box">
-                <span className="venta-total-label">Total de la venta</span>
-                <span className="venta-total-monto">${fmt(totalVenta)}</span>
+              {/* Descuento y totales */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'flex-end', marginTop: 8 }}>
+                <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--texto-suave)' }}>Descuento (%)</label>
+                <input type="number" min="0" max="100" step="0.5" value={descuento}
+                  onChange={e => setDescuento(e.target.value)}
+                  placeholder="0" style={{ width: 70, textAlign: 'right' }} />
+              </div>
+              <div className="venta-total-box" style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                {descuentoPct > 0 && (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: 13, color: 'var(--texto-suave)' }}>
+                      <span>Subtotal</span><span>${fmt(subtotalVenta)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: 13, color: 'var(--rojo)' }}>
+                      <span>Descuento ({descuentoPct}%)</span><span>−${fmt(montoDescuento)}</span>
+                    </div>
+                  </>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                  <span className="venta-total-label">Total de la venta</span>
+                  <span className="venta-total-monto">${fmt(totalVenta)}</span>
+                </div>
               </div>
             </>
           )}
@@ -502,7 +531,7 @@ export default function Ventas() {
             <div className="form-group">
               <label>Forma de entrega</label>
               <select value={formaEntrega}
-                onChange={e => { setFormaEntrega(e.target.value); if (e.target.value !== 'Domicilio') setDireccionEntrega(''); }}>
+                onChange={e => { setFormaEntrega(e.target.value); if (e.target.value !== 'Domicilio') { setDireccionCalle(''); setDireccionNro(''); setDireccionCiudad('El Carmen'); } }}>
                 {FORMAS_ENTREGA.map(f => <option key={f} value={f}>{f}</option>)}
               </select>
             </div>
@@ -544,15 +573,27 @@ export default function Ventas() {
               </>
             )}
 
-            {/* Dirección de entrega */}
+            {/* Dirección de entrega — campos separados */}
             {formaEntrega === 'Domicilio' && (
-              <div className="form-group span-2">
-                <label>Dirección de entrega *</label>
-                <input value={direccionEntrega} onChange={e => setDireccionEntrega(e.target.value)}
-                  className={errDireccion ? 'error-campo' : ''}
-                  placeholder="Ej: Av. Independencia 350" />
-                {errDireccion && <span className="error-msg">{errDireccion}</span>}
-              </div>
+              <>
+                <div className="form-group">
+                  <label>Calle *</label>
+                  <input value={direccionCalle} onChange={e => setDireccionCalle(e.target.value)}
+                    className={errDireccion ? 'error-campo' : ''}
+                    placeholder="Ej: Av. Independencia" />
+                  {errDireccion && <span className="error-msg">{errDireccion}</span>}
+                </div>
+                <div className="form-group">
+                  <label>Número</label>
+                  <input value={direccionNro} onChange={e => setDireccionNro(e.target.value)}
+                    placeholder="Ej: 350" />
+                </div>
+                <div className="form-group span-2">
+                  <label>Ciudad</label>
+                  <input value={direccionCiudad} onChange={e => setDireccionCiudad(e.target.value)}
+                    placeholder="Ej: El Carmen" />
+                </div>
+              </>
             )}
 
             <div className="form-group span-2">

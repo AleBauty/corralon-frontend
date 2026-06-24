@@ -52,6 +52,7 @@ export default function Presupuestos() {
   const [usarDosFormas, setUsarDosFormas] = useState(false);
   const [formaPago2, setFormaPago2]       = useState('Transferencia');
   const [montoPago2, setMontoPago2]       = useState('');
+  const [descuento, setDescuento]         = useState('');
 
   // ─── Modal confirmar como venta ───
   const [modalConfirmar, setModalConfirmar] = useState(null);
@@ -83,7 +84,10 @@ export default function Presupuestos() {
     return () => document.removeEventListener('mousedown', fn);
   }, []);
 
-  const totalPresup = useMemo(() => items.reduce((acc, i) => acc + i.subtotal, 0), [items]);
+  const subtotalPresup = useMemo(() => items.reduce((acc, i) => acc + i.subtotal, 0), [items]);
+  const descuentoPct   = parseFloat(descuento) || 0;
+  const montoDescuento = subtotalPresup * descuentoPct / 100;
+  const totalPresup    = subtotalPresup * (1 - descuentoPct / 100);
 
   // Auto-fill montoPago1 cuando es pago simple
   useEffect(() => {
@@ -108,7 +112,7 @@ export default function Presupuestos() {
     setModalNuevo(false); setEditandoId(null); setItems([]); setDniCliente(''); setObservaciones('');
     setBusquedaProd(''); setProdSel(null); setCantInput(''); setErrorGuardado(null);
     setFormaPago1('Efectivo'); setMontoPago1(''); setUsarDosFormas(false);
-    setFormaPago2('Transferencia'); setMontoPago2('');
+    setFormaPago2('Transferencia'); setMontoPago2(''); setDescuento('');
   };
 
   const seleccionarProducto = p => { setProdSel(p); setBusquedaProd(p.nombre); setCantInput(''); };
@@ -170,6 +174,7 @@ export default function Presupuestos() {
       setDniCliente(det.dni_cliente ?? '');
       setObservaciones(det.observaciones ?? '');
       setItems(mappedItems);
+      setDescuento(det.descuento != null && parseFloat(det.descuento) > 0 ? String(parseFloat(det.descuento)) : '');
       setFormaPago1(det.forma_pago_1 ?? 'Efectivo');
       setMontoPago1(det.monto_pago_1 != null ? String(parseFloat(det.monto_pago_1)) : '');
       if (det.forma_pago_2) {
@@ -195,6 +200,7 @@ export default function Presupuestos() {
         dni_cliente:  dniCliente || null,
         observaciones: observaciones.trim() || null,
         items: items.map(i => ({ producto_codigo: i.producto_codigo, cantidad: i.cantidad, precio_unitario: i.precio_unitario })),
+        descuento: descuentoPct,
         forma_pago_1: formaPago1,
         monto_pago_1: usarDosFormas ? mp1Num : totalPresup,
         forma_pago_2: usarDosFormas ? formaPago2 : null,
@@ -430,10 +436,31 @@ export default function Presupuestos() {
                   </tbody>
                 </table>
               </div>
-              <div className="venta-total-box">
-                <span className="venta-total-label">Total del presupuesto</span>
-                <span className="venta-total-monto">${fmt(totalPresup)}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 6px' }}>
+                <label style={{ fontSize: 13, fontWeight: 600, minWidth: 110, color: 'var(--texto)' }}>Descuento (%)</label>
+                <input type="number" min="0" max="100" step="0.5" value={descuento}
+                  onChange={e => setDescuento(e.target.value)}
+                  placeholder="0" style={{ width: 90 }} />
               </div>
+              {descuentoPct > 0 ? (
+                <div className="venta-total-box" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 4 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--texto-suave)' }}>
+                    <span>Subtotal</span><span>${fmt(subtotalPresup)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#c0392b' }}>
+                    <span>Descuento ({descuentoPct}%)</span><span>- ${fmt(montoDescuento)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--borde)', paddingTop: 6, marginTop: 2 }}>
+                    <span className="venta-total-label">Total del presupuesto</span>
+                    <span className="venta-total-monto">${fmt(totalPresup)}</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="venta-total-box">
+                  <span className="venta-total-label">Total del presupuesto</span>
+                  <span className="venta-total-monto">${fmt(totalPresup)}</span>
+                </div>
+              )}
             </>
           )}
 

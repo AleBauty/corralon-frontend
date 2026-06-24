@@ -204,6 +204,79 @@ export default function Empleados() {
     } catch (err) { alert('Error: ' + err.message); }
   };
 
+  // ── Liquidaciones state ──────────────────────────────────────────
+  const [liqEmpDni, setLiqEmpDni]         = useState('');
+  const [liqMes, setLiqMes]               = useState(() => {
+    const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [liqResultado, setLiqResultado]   = useState(null);
+  const [liqCalculando, setLiqCalculando] = useState(false);
+  const [liqGuardando, setLiqGuardando]   = useState(false);
+  const [liqErr, setLiqErr]               = useState(null);
+  const [liqMsg, setLiqMsg]               = useState(null);
+
+  const calcularLiquidacion = async () => {
+    if (!liqEmpDni || !liqMes) { setLiqErr('Seleccioná un empleado y un período'); return; }
+    const emp = empleados.find(e => e.dni === liqEmpDni);
+    if (!emp?.tarifa_hora) { setLiqErr('El empleado no tiene tarifa por hora'); return; }
+    setLiqCalculando(true); setLiqErr(null); setLiqResultado(null); setLiqMsg(null);
+    try {
+      const [year, month] = liqMes.split('-');
+      const desde = `${year}-${month}-01`;
+      const diasMes = new Date(parseInt(year), parseInt(month), 0).getDate();
+      const hasta   = `${year}-${month}-${String(diasMes).padStart(2, '0')}`;
+      const data = await fetch(`${API}/api/asistencias?dni=${emp.dni}&desde=${desde}&hasta=${hasta}`).then(r => r.json());
+      const asists = Array.isArray(data) ? data : (data.asistencias ?? []);
+      const tarifa = parseFloat(emp.tarifa_hora);
+      let horasNormales = 0, horasExtra = 0, diasTrabajados = 0;
+      for (const a of asists) {
+        const horas = parseFloat(a.horas_trabajadas ?? 0);
+        if (horas > 0) {
+          diasTrabajados++;
+          const normales = Math.min(horas, 9);
+          const extra    = Math.max(horas - 9, 0);
+          horasNormales += normales;
+          horasExtra    += extra;
+        }
+      }
+      const montoNormal = horasNormales * tarifa;
+      const montoExtra  = horasExtra * tarifa * 1.5;
+      const totalLiq    = montoNormal + montoExtra;
+      setLiqResultado({ emp, desde, hasta, diasTrabajados, horasNormales, horasExtra, montoNormal, montoExtra, totalLiq, tarifa, asists });
+    } catch (err) { setLiqErr('Error al calcular: ' + err.message); }
+    finally { setLiqCalculando(false); }
+  };
+
+  const guardarLiquidacion = async () => {
+    if (!liqResultado) return;
+    setLiqGuardando(true); setLiqErr(null);
+    try {
+      const { emp, desde, hasta, horasNormales, horasExtra, totalLiq, tarifa } = liqResultado;
+      const [year, month] = liqMes.split('-');
+      const periodoLabel  = new Date(parseInt(year), parseInt(month) - 1, 1)
+        .toLocaleDateString('es-AR', { month: 'long', year: 'numeric' });
+      const body = {
+        dni_empleado:   emp.dni,
+        periodo:        periodoLabel,
+        fecha_desde:    desde,
+        fecha_hasta:    hasta,
+        horas_trabajadas: (horasNormales + horasExtra).toFixed(2),
+        tarifa_hora:    tarifa,
+        total:          totalLiq.toFixed(2),
+        horas_extra:    horasExtra.toFixed(2),
+        estado:         'Pendiente',
+      };
+      const res  = await fetch(`${API}/api/remuneraciones`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      setLiqMsg(`Liquidación guardada. Total: $${parseFloat(totalLiq).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`);
+      setLiqResultado(null);
+    } catch (err) { setLiqErr(err.message); }
+    finally { setLiqGuardando(false); }
+  };
+
   if (cargando) return <p className="estado-carga">Cargando empleados...</p>;
   if (error)    return <p className="estado-error">Error: {error}</p>;
 
@@ -216,8 +289,9 @@ export default function Empleados() {
       </div>
 
       <div className="seccion-tabs">
-        <button className={`seccion-tab ${tab === 'empleados'  ? 'activo' : ''}`} onClick={() => setTab('empleados')}>👷 Empleados</button>
-        <button className={`seccion-tab ${tab === 'categorias' ? 'activo' : ''}`} onClick={() => setTab('categorias')}>📋 Categorías</button>
+        <button className={`seccion-tab ${tab === 'empleados'    ? 'activo' : ''}`} onClick={() => setTab('empleados')}>👷 Empleados</button>
+        <button className={`seccion-tab ${tab === 'categorias'   ? 'activo' : ''}`} onClick={() => setTab('categorias')}>📋 Categorías</button>
+        <button className={`seccion-tab ${tab === 'liquidaciones'? 'activo' : ''}`} onClick={() => setTab('liquidaciones')}>💵 Liquidaciones</button>
       </div>
 
       {/* ══ TAB: EMPLEADOS ══════════════════════════════════════════ */}
@@ -281,6 +355,101 @@ export default function Empleados() {
             </div>
           )}
         </>
+      )}
+
+      {/* ══ TAB: LIQUIDACIONES ═════════════════════════════════════ */}
+      {tab === 'liquidaciones' && (
+        <div style={{ maxWidth: 680 }}>
+          <p style={{ fontSize: 13, color: 'var(--texto-suave)', marginBottom: 20 }}>
+            Calculá el sueldo mensual de un empleado según sus asistencias. Horas extra (&gt;9h/día) se pagan al 150%.
+          </p>
+
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 20 }}>
+            <div className="form-group" style={{ flex: 2, minWidth: 200, marginBottom: 0 }}>
+              <label>Empleado</label>
+              <select value={liqEmpDni} onChange={e => setLiqEmpDni(e.target.value)}>
+                <option value="">— Seleccionar —</option>
+                {empleados.filter(e => e.estado === 'Activo').map(e => (
+                  <option key={e.dni} value={e.dni}>{e.nombre}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group" style={{ flex: 1, minWidth: 140, marginBottom: 0 }}>
+              <label>Mes / Año</label>
+              <input type="month" value={liqMes} onChange={e => setLiqMes(e.target.value)} />
+            </div>
+            <button className="btn btn-primary" onClick={calcularLiquidacion} disabled={liqCalculando} style={{ alignSelf: 'flex-end' }}>
+              {liqCalculando ? 'Calculando...' : 'Calcular'}
+            </button>
+          </div>
+
+          {liqErr && <p className="error-msg" style={{ marginBottom: 12 }}>{liqErr}</p>}
+          {liqMsg && <p style={{ background: 'var(--verde-fondo)', color: 'var(--verde)', padding: '10px 14px', borderRadius: 8, marginBottom: 12, fontWeight: 600 }}>{liqMsg}</p>}
+
+          {liqResultado && (
+            <div style={{ background: '#fff', border: '1px solid var(--borde)', borderRadius: 12, padding: '20px 24px' }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>
+                Liquidación: {liqResultado.emp.nombre}
+              </h3>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+                {[
+                  ['Días trabajados', liqResultado.diasTrabajados],
+                  ['Horas normales (≤9h/día)', `${liqResultado.horasNormales.toFixed(1)}h`],
+                  ['Horas extra (>9h/día)', `${liqResultado.horasExtra.toFixed(1)}h`],
+                  ['Tarifa normal', `$${parseFloat(liqResultado.tarifa).toLocaleString('es-AR', { minimumFractionDigits: 2 })}/h`],
+                  ['Tarifa extra (×1.5)', `$${(liqResultado.tarifa * 1.5).toLocaleString('es-AR', { minimumFractionDigits: 2 })}/h`],
+                  ['Monto normal', `$${liqResultado.montoNormal.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`],
+                  ['Monto extra', `$${liqResultado.montoExtra.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`],
+                ].map(([label, val]) => (
+                  <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--borde)', fontSize: 14 }}>
+                    <span style={{ color: 'var(--texto-suave)' }}>{label}</span>
+                    <span style={{ fontWeight: 600 }}>{val}</span>
+                  </div>
+                ))}
+                <div style={{ gridColumn: '1/-1', display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderTop: '2px solid var(--borde)', fontSize: 18, fontWeight: 700, marginTop: 4 }}>
+                  <span>Total a pagar</span>
+                  <span style={{ color: 'var(--verde)' }}>${liqResultado.totalLiq.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</span>
+                </div>
+              </div>
+
+              {liqResultado.asists.length > 0 && (
+                <details style={{ marginBottom: 16 }}>
+                  <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--texto-suave)', marginBottom: 8 }}>
+                    Ver detalle asistencias ({liqResultado.asists.length} registros)
+                  </summary>
+                  <div className="tabla-wrapper" style={{ margin: 0 }}>
+                    <table>
+                      <thead><tr><th>Fecha</th><th>Entrada</th><th>Salida</th><th style={{ textAlign: 'right' }}>Horas</th><th style={{ textAlign: 'right' }}>Normales</th><th style={{ textAlign: 'right' }}>Extra</th></tr></thead>
+                      <tbody>
+                        {liqResultado.asists.map(a => {
+                          const h = parseFloat(a.horas_trabajadas ?? 0);
+                          const n = Math.min(h, 9), x = Math.max(h - 9, 0);
+                          return (
+                            <tr key={a.id}>
+                              <td>{new Date(a.fecha).toLocaleDateString('es-AR')}</td>
+                              <td>{a.hora_entrada ? String(a.hora_entrada).substring(0, 5) : '—'}</td>
+                              <td>{a.hora_salida ? String(a.hora_salida).substring(0, 5) : '—'}</td>
+                              <td style={{ textAlign: 'right', fontWeight: 600 }}>{h.toFixed(1)}h</td>
+                              <td style={{ textAlign: 'right' }}>{n.toFixed(1)}h</td>
+                              <td style={{ textAlign: 'right', color: x > 0 ? 'var(--naranja-oscuro)' : undefined }}>{x > 0 ? `${x.toFixed(1)}h` : '—'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              )}
+
+              <div className="modal-footer" style={{ padding: 0, borderTop: 'none', marginTop: 0 }}>
+                <button className="btn btn-secundario" onClick={() => setLiqResultado(null)}>Descartar</button>
+                <button className="btn btn-primary" onClick={guardarLiquidacion} disabled={liqGuardando}>
+                  {liqGuardando ? 'Guardando...' : 'Guardar liquidación'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {/* ── Modal empleado ─────────────────────────────────────────── */}

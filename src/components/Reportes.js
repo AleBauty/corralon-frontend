@@ -390,12 +390,198 @@ function ReporteStock() {
   );
 }
 
+// ── Reporte 5: Rentabilidad por producto ─────────────────────────
+function ReporteRentabilidad() {
+  const [datos, setDatos]       = useState([]);
+  const [cargando, setCargando] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API}/api/reportes/rentabilidad-productos`)
+      .then(r => r.json())
+      .then(d => { setDatos(Array.isArray(d) ? d : []); setCargando(false); })
+      .catch(() => setCargando(false));
+  }, []);
+
+  if (cargando) return <p className="estado-carga">Cargando...</p>;
+  if (!datos.length) return <p className="estado-carga">Sin datos de ventas.</p>;
+
+  const totalGanancia = datos.reduce((a, d) => a + parseFloat(d.ganancia_total ?? 0), 0);
+  const totalIngresos = datos.reduce((a, d) => a + parseFloat(d.ingresos_total ?? 0), 0);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
+        <KpiCard label="Ingresos totales" valor={`$${fmt(totalIngresos)}`} />
+        <KpiCard label="Ganancia total" valor={`$${fmt(totalGanancia)}`} color="var(--verde)" />
+        <KpiCard label="Margen promedio"
+          valor={totalIngresos > 0 ? `${((totalGanancia / totalIngresos) * 100).toFixed(1)}%` : '—'}
+          color="var(--texto-medio)" />
+      </div>
+      <div className="tabla-wrapper">
+        <table>
+          <thead><tr>
+            <th>Producto</th>
+            <th style={{ textAlign: 'right' }}>Cant. vendida</th>
+            <th style={{ textAlign: 'right' }}>Precio costo</th>
+            <th style={{ textAlign: 'right' }}>Precio venta</th>
+            <th style={{ textAlign: 'right' }}>Ingresos</th>
+            <th style={{ textAlign: 'right' }}>Ganancia</th>
+            <th style={{ textAlign: 'right' }}>Margen</th>
+          </tr></thead>
+          <tbody>
+            {datos.map(d => {
+              const gan  = parseFloat(d.ganancia_total ?? 0);
+              const ing  = parseFloat(d.ingresos_total ?? 0);
+              const margen = ing > 0 ? (gan / ing * 100).toFixed(1) : '0.0';
+              return (
+                <tr key={d.producto_codigo}>
+                  <td style={{ fontWeight: 500 }}>
+                    {d.nombre}
+                    <code style={{ marginLeft: 6, fontSize: 10, color: 'var(--texto-suave)' }}>{d.producto_codigo}</code>
+                  </td>
+                  <td style={{ textAlign: 'right' }}>{fmtCant(d.cantidad_vendida)}</td>
+                  <td style={{ textAlign: 'right' }}>${fmt(d.precio_costo)}</td>
+                  <td style={{ textAlign: 'right' }}>${fmt(d.precio_venta)}</td>
+                  <td style={{ textAlign: 'right' }}>${fmt(d.ingresos_total)}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 700, color: gan >= 0 ? 'var(--verde)' : 'var(--rojo)' }}>
+                    ${fmt(gan)}
+                  </td>
+                  <td style={{ textAlign: 'right', color: parseFloat(margen) >= 20 ? 'var(--verde)' : 'var(--amarillo)' }}>
+                    {margen}%
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Reporte 6: Ranking clientes ───────────────────────────────────
+function ReporteRankingClientes() {
+  const [datos, setDatos]       = useState([]);
+  const [cargando, setCargando] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API}/api/reportes/ranking-clientes`)
+      .then(r => r.json())
+      .then(d => { setDatos(Array.isArray(d) ? d : []); setCargando(false); })
+      .catch(() => setCargando(false));
+  }, []);
+
+  if (cargando) return <p className="estado-carga">Cargando...</p>;
+  if (!datos.length) return <p className="estado-carga">Sin datos.</p>;
+
+  const maxTotal = Math.max(...datos.map(d => parseFloat(d.total_comprado ?? 0)), 1);
+
+  return (
+    <div>
+      <p style={{ color: 'var(--texto-suave)', fontSize: 13, marginBottom: 20 }}>
+        Clientes ordenados por volumen de compras — histórico completo
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {datos.map((d, i) => {
+          const total = parseFloat(d.total_comprado ?? 0);
+          const pct   = Math.round((total / maxTotal) * 100);
+          return (
+            <div key={d.dni_cliente}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>
+                  <span style={{ color: 'var(--texto-suave)', fontSize: 11, marginRight: 8 }}>#{i + 1}</span>
+                  {d.cliente}
+                  <code style={{ marginLeft: 8, fontSize: 11, color: 'var(--texto-suave)' }}>{d.dni_cliente}</code>
+                </span>
+                <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--naranja-oscuro)' }}>
+                  ${fmt(total)} — {d.cantidad_compras} compras
+                </span>
+              </div>
+              <div className="progreso-barra">
+                <div className="progreso-fill" style={{ width: `${pct}%`, minWidth: pct > 0 ? 4 : 0 }}>
+                  {pct > 10 && `${pct}%`}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Reporte 7: Deudores CC ────────────────────────────────────────
+function ReporteDeudores() {
+  const [datos, setDatos]       = useState([]);
+  const [cargando, setCargando] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API}/api/reportes/deudores`)
+      .then(r => r.json())
+      .then(d => { setDatos(Array.isArray(d) ? d : []); setCargando(false); })
+      .catch(() => setCargando(false));
+  }, []);
+
+  if (cargando) return <p className="estado-carga">Cargando...</p>;
+  if (!datos.length) return <p className="estado-carga" style={{ color: 'var(--verde)' }}>✓ No hay deudores en cuenta corriente.</p>;
+
+  const totalDeuda = datos.reduce((a, d) => a + parseFloat(d.saldo_total ?? 0), 0);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
+        <KpiCard label="Total deuda CC" valor={`$${fmt(totalDeuda)}`} color="var(--rojo)" />
+        <KpiCard label="Clientes deudores" valor={datos.length} color="var(--texto-medio)" />
+      </div>
+      <div className="tabla-wrapper">
+        <table>
+          <thead><tr>
+            <th>Cliente</th><th>Teléfono</th>
+            <th style={{ textAlign: 'right' }}>Límite CC</th>
+            <th style={{ textAlign: 'right' }}>Saldo deuda</th>
+            <th style={{ textAlign: 'right' }}>% límite</th>
+            <th>Deuda más antigua</th>
+          </tr></thead>
+          <tbody>
+            {datos.map(d => {
+              const saldo  = parseFloat(d.saldo_total ?? 0);
+              const limite = parseFloat(d.limite_credito ?? 0);
+              const pct    = limite > 0 ? (saldo / limite * 100).toFixed(0) : '—';
+              const urgente = limite > 0 && saldo > limite;
+              const warning = limite > 0 && saldo > limite * 0.8 && !urgente;
+              return (
+                <tr key={d.dni_cliente} style={urgente ? { background: 'rgba(231,76,60,0.04)' } : {}}>
+                  <td style={{ fontWeight: 600 }}>
+                    {urgente && '🔴 '}{warning && '⚠ '}
+                    {d.cliente}
+                    <code style={{ marginLeft: 6, fontSize: 10, color: 'var(--texto-suave)' }}>{d.dni_cliente}</code>
+                  </td>
+                  <td>{d.telefono ?? '—'}</td>
+                  <td style={{ textAlign: 'right' }}>{limite > 0 ? `$${fmt(limite)}` : '—'}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--rojo)' }}>${fmt(saldo)}</td>
+                  <td style={{ textAlign: 'right', color: urgente ? 'var(--rojo)' : warning ? 'var(--amarillo)' : 'var(--texto-medio)' }}>
+                    {pct !== '—' ? `${pct}%` : '—'}
+                  </td>
+                  <td style={{ fontSize: 12, color: 'var(--texto-suave)' }}>{fechaCorta(d.deuda_mas_antigua)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ─────────────────────────────────────────────────
 const TABS_REPORTE = [
-  { id: 'ventas',      label: '📊 Ventas por período' },
-  { id: 'productos',   label: '🏆 Más vendidos' },
-  { id: 'asistencias', label: '⏰ Asistencias' },
-  { id: 'stock',       label: '⚠ Stock crítico' },
+  { id: 'ventas',          label: '📊 Ventas por período' },
+  { id: 'productos',       label: '🏆 Más vendidos' },
+  { id: 'rentabilidad',    label: '💰 Rentabilidad' },
+  { id: 'ranking',         label: '👥 Ranking clientes' },
+  { id: 'deudores',        label: '🔴 Deudores CC' },
+  { id: 'asistencias',     label: '⏰ Asistencias' },
+  { id: 'stock',           label: '⚠ Stock crítico' },
 ];
 
 export default function Reportes() {
@@ -415,10 +601,13 @@ export default function Reportes() {
         ))}
       </div>
 
-      {tab === 'ventas'      && <ReporteVentas />}
-      {tab === 'productos'   && <ReporteProductos />}
-      {tab === 'asistencias' && <ReporteAsistencias />}
-      {tab === 'stock'       && <ReporteStock />}
+      {tab === 'ventas'       && <ReporteVentas />}
+      {tab === 'productos'    && <ReporteProductos />}
+      {tab === 'rentabilidad' && <ReporteRentabilidad />}
+      {tab === 'ranking'      && <ReporteRankingClientes />}
+      {tab === 'deudores'     && <ReporteDeudores />}
+      {tab === 'asistencias'  && <ReporteAsistencias />}
+      {tab === 'stock'        && <ReporteStock />}
     </div>
   );
 }

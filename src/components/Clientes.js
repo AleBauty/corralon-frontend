@@ -60,15 +60,32 @@ export default function Clientes() {
   const [cpBuscando, setCpBuscando] = useState(false);
   const [cpInfo,     setCpInfo]     = useState('');
 
+  // Saldos CC
+  const [saldosCC, setSaldosCC] = useState({});
+
+  // Historial de compras
+  const [modalHistorial, setModalHistorial]   = useState(false);
+  const [historialCli, setHistorialCli]       = useState(null);
+  const [historialData, setHistorialData]     = useState([]);
+  const [cargandoHistorial, setCargandoHistorial] = useState(false);
+
   const errores    = useMemo(() => validar(form, esEdicion), [form, esEdicion]);
   const hayErrores = Object.values(errores).some(Boolean);
 
   const cargarClientes = useCallback(() => {
     setCargando(true);
-    fetch(`${API}/api/clientes`)
-      .then(r => r.ok ? r.json() : Promise.reject(`Error ${r.status}`))
-      .then(data => { setClientes(data); setCargando(false); })
-      .catch(err  => { setError(String(err)); setCargando(false); });
+    Promise.all([
+      fetch(`${API}/api/clientes`).then(r => r.json()),
+      fetch(`${API}/api/reportes/deudores`).then(r => r.json()).catch(() => []),
+    ]).then(([cli, deudores]) => {
+      setClientes(Array.isArray(cli) ? cli : []);
+      const map = {};
+      if (Array.isArray(deudores)) {
+        deudores.forEach(d => { map[d.dni_cliente] = parseFloat(d.saldo_total ?? 0); });
+      }
+      setSaldosCC(map);
+      setCargando(false);
+    }).catch(err => { setError(String(err)); setCargando(false); });
   }, []);
 
   useEffect(() => { cargarClientes(); }, [cargarClientes]);
@@ -114,6 +131,16 @@ export default function Clientes() {
     setEsEdicion(true); setErrorGuardado(null); setModalAbierto(true);
   };
   const cerrar  = () => { setModalAbierto(false); setErrorGuardado(null); setCpInfo(''); };
+
+  const verHistorial = async (c) => {
+    setHistorialCli(c); setHistorialData([]); setModalHistorial(true);
+    setCargandoHistorial(true);
+    try {
+      const data = await fetch(`${API}/api/clientes/${c.dni}/historial-compras`).then(r => r.json());
+      setHistorialData(Array.isArray(data) ? data : []);
+    } catch { setHistorialData([]); }
+    finally { setCargandoHistorial(false); }
+  };
   const cambiar = (campo, valor) => setForm(f => ({ ...f, [campo]: valor }));
 
   const guardar = async () => {
@@ -156,28 +183,105 @@ export default function Clientes() {
           <table>
             <thead><tr>
               <th>DNI</th><th>Nombre y Apellido</th><th>Teléfono</th>
-              <th>Localidad</th><th>Tipo</th><th>Límite CC</th><th></th>
+              <th>Localidad</th><th>Tipo</th><th>Límite / Saldo CC</th><th></th>
             </tr></thead>
             <tbody>
-              {filtrados.map(c => (
-                <tr key={c.dni}>
-                  <td><code>{c.dni}</code></td>
-                  <td style={{ fontWeight: 500 }}>{c.nombre_apellido}</td>
-                  <td>{c.telefono ?? '—'}</td>
-                  <td style={{ fontSize: 13 }}>
-                    {c.localidad ? c.localidad : (c.domicilio ?? '—')}
-                    {c.codigo_postal && <span style={{ color: 'var(--texto-suave)', marginLeft: 4 }}>({c.codigo_postal})</span>}
-                  </td>
-                  <td><span className="badge" style={TIPO_ESTILO[c.tipo] ?? TIPO_ESTILO.Normal}>{c.tipo}</span></td>
-                  <td style={{ textAlign: 'right', fontSize: 13 }}>
-                    {c.tipo === 'Cuenta corriente' ? `$${fmt(c.limite_credito)}` : '—'}
-                  </td>
-                  <td><button className="btn-editar" onClick={() => abrirEditar(c)}>Editar</button></td>
-                </tr>
-              ))}
+              {filtrados.map(c => {
+                const saldo  = saldosCC[c.dni] ?? 0;
+                const limite = parseFloat(c.limite_credito ?? 50000);
+                const pct    = limite > 0 ? saldo / limite : 0;
+                const alerta = c.tipo === 'Cuenta corriente'
+                  ? pct > 1    ? 'rojo'
+                  : pct > 0.8  ? 'amarillo'
+                  : null
+                  : null;
+                return (
+                  <tr key={c.dni}>
+                    <td><code>{c.dni}</code></td>
+                    <td style={{ fontWeight: 500 }}>{c.nombre_apellido}</td>
+                    <td>{c.telefono ?? '—'}</td>
+                    <td style={{ fontSize: 13 }}>
+                      {c.localidad ? c.localidad : (c.domicilio ?? '—')}
+                      {c.codigo_postal && <span style={{ color: 'var(--texto-suave)', marginLeft: 4 }}>({c.codigo_postal})</span>}
+                    </td>
+                    <td><span className="badge" style={TIPO_ESTILO[c.tipo] ?? TIPO_ESTILO.Normal}>{c.tipo}</span></td>
+                    <td style={{ textAlign: 'right', fontSize: 13 }}>
+                      {c.tipo === 'Cuenta corriente' ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                          <span>${fmt(c.limite_credito)}</span>
+                          <span style={{ fontSize: 11, color: alerta === 'rojo' ? '#dc2626' : alerta === 'amarillo' ? '#d97706' : '#6b7280' }}>
+                            {alerta === 'rojo'    && '🔴 Límite excedido'}
+                            {alerta === 'amarillo' && '⚠ Cerca del límite'}
+                            {!alerta && saldo > 0 && `Deuda: $${fmt(saldo)}`}
+                          </span>
+                        </div>
+                      ) : '—'}
+                    </td>
+                    <td style={{ display: 'flex', gap: 6 }}>
+                      <button className="btn-editar" onClick={() => verHistorial(c)}>Historial</button>
+                      <button className="btn-editar" onClick={() => abrirEditar(c)}>Editar</button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
+      )}
+
+      {modalHistorial && historialCli && (
+        <Modal titulo={`Historial de compras — ${historialCli.nombre_apellido}`} onCerrar={() => setModalHistorial(false)} ancho={760}>
+          {cargandoHistorial && <p style={{ color: '#6b7280', padding: 16 }}>Cargando...</p>}
+          {!cargandoHistorial && historialData.length === 0 && (
+            <p style={{ color: '#9ca3af', padding: 16, textAlign: 'center' }}>Este cliente no tiene compras registradas.</p>
+          )}
+          {!cargandoHistorial && historialData.length > 0 && (
+            <div style={{ overflowX: 'auto' }}>
+              <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
+                <strong>{historialData.length}</strong> compras — Total: <strong>${fmt(historialData.reduce((a, v) => a + parseFloat(v.total ?? 0), 0))}</strong>
+              </p>
+              {historialData.map(v => (
+                <div key={v.id} style={{ border: '1px solid #e5e7eb', borderRadius: 8, marginBottom: 10, overflow: 'hidden' }}>
+                  <div style={{ background: '#f9fafb', padding: '8px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>
+                      Venta #{v.id} — {new Date(v.fecha).toLocaleDateString('es-AR')}
+                    </span>
+                    <div style={{ display: 'flex', gap: 12, fontSize: 13, alignItems: 'center' }}>
+                      <span style={{ color: '#6b7280' }}>{v.forma_pago_1}</span>
+                      <span style={{ fontWeight: 700, color: '#111' }}>${fmt(v.total)}</span>
+                      <span className="badge" style={{ fontSize: 11, padding: '2px 8px', background: v.estado === 'Entregada' ? '#eef2ff' : '#e6f9f0', color: v.estado === 'Entregada' ? '#3730a3' : '#166534' }}>
+                        {v.estado}
+                      </span>
+                    </div>
+                  </div>
+                  {Array.isArray(v.items) && v.items.length > 0 && (
+                    <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ background: '#f3f4f6' }}>
+                          <th style={{ padding: '5px 14px', textAlign: 'left', fontWeight: 600, color: '#6b7280' }}>Producto</th>
+                          <th style={{ padding: '5px 14px', textAlign: 'right', fontWeight: 600, color: '#6b7280' }}>Cant.</th>
+                          <th style={{ padding: '5px 14px', textAlign: 'right', fontWeight: 600, color: '#6b7280' }}>Subtotal</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {v.items.map((it, idx) => (
+                          <tr key={idx} style={{ borderTop: '1px solid #f3f4f6' }}>
+                            <td style={{ padding: '5px 14px' }}>{it.producto ?? '—'}</td>
+                            <td style={{ padding: '5px 14px', textAlign: 'right' }}>{parseFloat(it.cantidad ?? 0).toLocaleString('es-AR')}</td>
+                            <td style={{ padding: '5px 14px', textAlign: 'right' }}>${fmt(it.subtotal)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="modal-footer">
+            <button className="btn btn-secundario" onClick={() => setModalHistorial(false)}>Cerrar</button>
+          </div>
+        </Modal>
       )}
 
       {modalAbierto && (

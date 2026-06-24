@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Menu, X, LogOut,
   LayoutDashboard, ShoppingCart, FileText, Package,
   Users, Boxes, Truck, Navigation, BarChart2,
-  CreditCard, Banknote, UserCheck, Clock,
+  CreditCard, Banknote, UserCheck, Clock, Lock, Bell,
 } from 'lucide-react';
 import Login           from './components/Login';
 import Dashboard       from './components/Dashboard';
@@ -19,7 +19,10 @@ import Vehiculos       from './components/Vehiculos';
 import CuentaCorriente from './components/CuentaCorriente';
 import Reportes        from './components/Reportes';
 import Egresos         from './components/Egresos';
+import CierreCaja      from './components/CierreCaja';
 import './App.css';
+
+const API = process.env.REACT_APP_API_URL ?? 'https://corralon-backend-production.up.railway.app';
 
 const TODAS_SECCIONES = [
   { id: 'dashboard',       label: 'Dashboard',       Icon: LayoutDashboard },
@@ -35,20 +38,21 @@ const TODAS_SECCIONES = [
   { id: 'egresos',         label: 'Egresos',          Icon: Banknote },
   { id: 'empleados',       label: 'Empleados',        Icon: UserCheck },
   { id: 'asistencias',     label: 'Asistencias',      Icon: Clock },
+  { id: 'cierreCaja',      label: 'Cierre de Caja',   Icon: Lock },
 ];
 
 const NAV_GRUPOS = [
   { grupo: 'Comercial',      ids: ['ventas', 'presupuestos', 'pedidos', 'clientes'] },
   { grupo: 'Inventario',     ids: ['productos', 'proveedores'] },
   { grupo: 'Logística',      ids: ['vehiculos'] },
-  { grupo: 'Administración', ids: ['reportes', 'cuentaCorriente', 'egresos'] },
+  { grupo: 'Administración', ids: ['reportes', 'cuentaCorriente', 'egresos', 'cierreCaja'] },
   { grupo: 'Personal',       ids: ['empleados', 'asistencias'] },
 ];
 
 const SECCIONES_POR_ROL = {
-  admin:            ['dashboard', 'ventas', 'presupuestos', 'pedidos', 'clientes', 'productos', 'proveedores', 'vehiculos', 'reportes', 'cuentaCorriente', 'egresos', 'empleados', 'asistencias'],
+  admin:            ['dashboard', 'ventas', 'presupuestos', 'pedidos', 'clientes', 'productos', 'proveedores', 'vehiculos', 'reportes', 'cuentaCorriente', 'egresos', 'empleados', 'asistencias', 'cierreCaja'],
   vendedor:         ['ventas', 'clientes', 'asistencias', 'presupuestos', 'cuentaCorriente'],
-  gerente_finanzas: ['ventas', 'reportes', 'cuentaCorriente', 'egresos', 'vehiculos'],
+  gerente_finanzas: ['ventas', 'reportes', 'cuentaCorriente', 'egresos', 'vehiculos', 'cierreCaja'],
   logistica:        ['vehiculos', 'asistencias'],
 };
 
@@ -80,8 +84,108 @@ function renderContenido(seccion) {
     case 'cuentaCorriente': return <CuentaCorriente />;
     case 'reportes':        return <Reportes />;
     case 'egresos':         return <Egresos />;
+    case 'cierreCaja':      return <CierreCaja />;
     default:                return null;
   }
+}
+
+function StockBadge({ onClick }) {
+  const [alertas, setAlertas] = useState([]);
+  const [open, setOpen]       = useState(false);
+
+  useEffect(() => {
+    fetch(`${API}/api/reportes/stock-alertas`)
+      .then(r => r.json())
+      .then(d => setAlertas(Array.isArray(d) ? d : []))
+      .catch(() => {});
+    const t = setInterval(() => {
+      fetch(`${API}/api/reportes/stock-alertas`)
+        .then(r => r.json())
+        .then(d => setAlertas(Array.isArray(d) ? d : []))
+        .catch(() => {});
+    }, 120000);
+    return () => clearInterval(t);
+  }, []);
+
+  if (!alertas.length) return null;
+
+  const bajos   = alertas.filter(a => a.nivel_alerta === 'bajo');
+  const proximos = alertas.filter(a => a.nivel_alerta === 'proximo');
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          position: 'relative', background: 'none', border: 'none',
+          cursor: 'pointer', color: bajos.length ? '#dc2626' : '#d97706',
+          padding: '4px 6px', borderRadius: 6,
+          display: 'flex', alignItems: 'center', gap: 4,
+        }}
+        title="Alertas de stock"
+      >
+        <Bell size={20} />
+        <span style={{
+          position: 'absolute', top: 0, right: 0,
+          background: bajos.length ? '#dc2626' : '#d97706',
+          color: '#fff', fontSize: 10, fontWeight: 700,
+          borderRadius: 999, padding: '1px 5px', lineHeight: 1.4,
+        }}>
+          {alertas.length}
+        </span>
+      </button>
+
+      {open && (
+        <>
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 999 }}
+            onClick={() => setOpen(false)}
+          />
+          <div style={{
+            position: 'absolute', right: 0, top: '100%', zIndex: 1000,
+            background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10,
+            boxShadow: '0 4px 16px rgba(0,0,0,.12)', width: 300, maxHeight: 400,
+            overflowY: 'auto', padding: '8px 0',
+          }}>
+            {bajos.length > 0 && (
+              <>
+                <div style={{ padding: '4px 14px', fontSize: 11, fontWeight: 700, color: '#dc2626', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                  🔴 Bajo stock ({bajos.length})
+                </div>
+                {bajos.map(p => (
+                  <div key={p.codigo} style={{ padding: '5px 14px', fontSize: 13, borderBottom: '1px solid #f3f4f6' }}>
+                    <strong>{p.nombre}</strong>
+                    <span style={{ float: 'right', color: '#dc2626' }}>{p.stock_actual} / {p.stock_minimo}</span>
+                  </div>
+                ))}
+              </>
+            )}
+            {proximos.length > 0 && (
+              <>
+                <div style={{ padding: '4px 14px', fontSize: 11, fontWeight: 700, color: '#d97706', textTransform: 'uppercase', letterSpacing: '.05em', marginTop: 4 }}>
+                  ⚠ Próximo a mínimo ({proximos.length})
+                </div>
+                {proximos.map(p => (
+                  <div key={p.codigo} style={{ padding: '5px 14px', fontSize: 13, borderBottom: '1px solid #f3f4f6' }}>
+                    <strong>{p.nombre}</strong>
+                    <span style={{ float: 'right', color: '#d97706' }}>{p.stock_actual} / {p.stock_minimo}</span>
+                  </div>
+                ))}
+              </>
+            )}
+            <div style={{ padding: '8px 14px 4px', textAlign: 'center' }}>
+              <button
+                onClick={() => { setOpen(false); onClick && onClick('productos'); }}
+                style={{ fontSize: 12, color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer' }}
+              >
+                Ver productos →
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 function App() {
@@ -124,7 +228,10 @@ function App() {
           {seccionInfo && <seccionInfo.Icon size={20} strokeWidth={2} />}
           <span>{seccionInfo?.label ?? ''}</span>
         </div>
-        <div className="header-usuario">
+        <div className="header-usuario" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {(usuario.rol === 'admin' || usuario.rol === 'gerente_finanzas') && (
+            <StockBadge onClick={navegar} />
+          )}
           <div className="header-usuario-info">
             <span className="header-usuario-nombre">{usuario.nombre}</span>
             <span className="header-usuario-rol">{ETIQUETA_ROL[usuario.rol] ?? usuario.rol}</span>
@@ -155,7 +262,6 @@ function App() {
         </div>
 
         <nav className="sidebar-nav">
-          {/* Dashboard (solo admin) */}
           {permitidosSet.has('dashboard') && (
             <button
               className={`sidebar-nav-item${seccionVisible === 'dashboard' ? ' activo' : ''}`}
@@ -166,7 +272,6 @@ function App() {
             </button>
           )}
 
-          {/* Grupos temáticos */}
           {NAV_GRUPOS.map(({ grupo, ids }) => {
             const items = ids.filter(id => permitidosSet.has(id)).map(id => MAPA_SECCIONES[id]);
             if (!items.length) return null;

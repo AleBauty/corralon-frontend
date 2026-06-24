@@ -47,6 +47,7 @@ function badgeStock(p) {
 }
 
 export default function Productos() {
+  const [tab, setTab] = useState('productos');
   const [productos, setProductos]         = useState([]);
   const [proveedores, setProveedores]     = useState([]);
   const [categorias, setCategorias]       = useState([]);
@@ -60,6 +61,24 @@ export default function Productos() {
   const [guardando, setGuardando]         = useState(false);
   const [errorGuardado, setErrorGuardado] = useState(null);
   const [generandoCodigo, setGenerandoCodigo] = useState(false);
+
+  // Historial precios modal
+  const [modalHistPrecios, setModalHistPrecios]   = useState(null);
+  const [histPreciosData, setHistPreciosData]     = useState([]);
+  const [cargandoHistPrecios, setCargandoHistPrecios] = useState(false);
+
+  // Movimientos stock modal
+  const [modalMovStock, setModalMovStock]   = useState(null);
+  const [movStockData, setMovStockData]     = useState([]);
+  const [cargandoMovStock, setCargandoMovStock] = useState(false);
+
+  // Inventario físico
+  const [inventarios, setInventarios]     = useState([]);
+  const [invActual, setInvActual]         = useState(null);
+  const [cargandoInv, setCargandoInv]     = useState(false);
+  const [iniciandoInv, setIniciandoInv]   = useState(false);
+  const [finalizandoInv, setFinalizandoInv] = useState(false);
+  const [errInv, setErrInv]               = useState(null);
 
   const errores    = useMemo(() => validar(form, esEdicion, ingresoStock), [form, esEdicion, ingresoStock]);
   const hayErrores = Object.values(errores).some(Boolean);
@@ -79,11 +98,93 @@ export default function Productos() {
       .catch(err  => { setError(String(err)); setCargando(false); });
   }, []);
 
+  const cargarInventarios = useCallback(() => {
+    fetch(`${API}/api/inventario`)
+      .then(r => r.json())
+      .then(d => setInventarios(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     cargarProductos();
     fetch(`${API}/api/proveedores`).then(r => r.json()).then(setProveedores).catch(() => {});
     fetch(`${API}/api/productos/categorias`).then(r => r.json()).then(setCategorias).catch(() => {});
-  }, [cargarProductos]);
+    cargarInventarios();
+  }, [cargarProductos, cargarInventarios]);
+
+  const verHistorialPrecios = async (p) => {
+    setModalHistPrecios(p); setHistPreciosData([]); setCargandoHistPrecios(true);
+    try {
+      const data = await fetch(`${API}/api/productos/${p.codigo}/historial-precios`).then(r => r.json());
+      setHistPreciosData(Array.isArray(data) ? data : []);
+    } catch { setHistPreciosData([]); }
+    finally { setCargandoHistPrecios(false); }
+  };
+
+  const verMovimientosStock = async (p) => {
+    setModalMovStock(p); setMovStockData([]); setCargandoMovStock(true);
+    try {
+      const data = await fetch(`${API}/api/productos/${p.codigo}/movimientos-stock`).then(r => r.json());
+      setMovStockData(Array.isArray(data) ? data : []);
+    } catch { setMovStockData([]); }
+    finally { setCargandoMovStock(false); }
+  };
+
+  const iniciarInventario = async () => {
+    if (!window.confirm('¿Iniciar un nuevo inventario físico? Se cargará la lista completa de productos con el stock actual del sistema.')) return;
+    const u = (() => { try { return JSON.parse(sessionStorage.getItem('usuario')); } catch { return null; } })();
+    setIniciandoInv(true); setErrInv(null);
+    try {
+      const res  = await fetch(`${API}/api/inventario/iniciar`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usuario: u?.nombre }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      cargarInventarios(); cargarInvActual(data.id);
+    } catch (err) { setErrInv(err.message); }
+    finally { setIniciandoInv(false); }
+  };
+
+  const cargarInvActual = async (id) => {
+    setCargandoInv(true); setErrInv(null);
+    try {
+      const data = await fetch(`${API}/api/inventario/${id}`).then(r => r.json());
+      setInvActual(data);
+    } catch (err) { setErrInv(err.message); }
+    finally { setCargandoInv(false); }
+  };
+
+  const actualizarItemInv = async (invId, itemId, stock_contado) => {
+    try {
+      await fetch(`${API}/api/inventario/${invId}/items/${itemId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stock_contado }),
+      });
+      setInvActual(prev => ({
+        ...prev,
+        items: prev.items.map(i => i.id === itemId ? { ...i, stock_contado } : i),
+      }));
+    } catch { /* ignore */ }
+  };
+
+  const finalizarInventario = async () => {
+    if (!invActual) return;
+    if (!window.confirm('¿Finalizar inventario? Los stocks del sistema se actualizarán con las cantidades contadas.')) return;
+    const u = (() => { try { return JSON.parse(sessionStorage.getItem('usuario')); } catch { return null; } })();
+    setFinalizandoInv(true); setErrInv(null);
+    try {
+      const res  = await fetch(`${API}/api/inventario/${invActual.id}/finalizar`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usuario: u?.nombre }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`);
+      setInvActual(null); cargarInventarios(); cargarProductos();
+      alert('Inventario finalizado. Los stocks fueron actualizados.');
+    } catch (err) { setErrInv(err.message); }
+    finally { setFinalizandoInv(false); }
+  };
 
   const obtenerSiguienteCodigo = async () => {
     setGenerandoCodigo(true);
@@ -175,10 +276,26 @@ export default function Productos() {
     <div>
       <div className="seccion-header">
         <h2>Productos <span className="total-registros">{productos.length}</span></h2>
-        <button className="btn-nuevo" onClick={abrirCrear} disabled={generandoCodigo}>
-          {generandoCodigo ? 'Generando...' : '+ Nuevo producto'}
-        </button>
+        {tab === 'productos' && (
+          <button className="btn-nuevo" onClick={abrirCrear} disabled={generandoCodigo}>
+            {generandoCodigo ? 'Generando...' : '+ Nuevo producto'}
+          </button>
+        )}
+        {tab === 'inventario' && !invActual && (
+          <button className="btn-nuevo" onClick={iniciarInventario} disabled={iniciandoInv}>
+            {iniciandoInv ? 'Iniciando...' : '+ Nuevo inventario'}
+          </button>
+        )}
       </div>
+
+      <div className="seccion-tabs" style={{ marginBottom: 20 }}>
+        <button className={`seccion-tab ${tab === 'productos'  ? 'activo' : ''}`} onClick={() => setTab('productos')}>📦 Productos</button>
+        <button className={`seccion-tab ${tab === 'inventario' ? 'activo' : ''}`} onClick={() => setTab('inventario')}>📋 Inventario físico</button>
+      </div>
+
+      {/* ══ TAB PRODUCTOS ══ */}
+      {tab === 'productos' && (
+        <>
       {productos.length === 0 ? <p className="estado-carga">No hay productos cargados.</p> : (
         <div className="tabla-wrapper">
           <table>
@@ -201,12 +318,209 @@ export default function Productos() {
                   <td style={{ textAlign: 'right' }}>${parseFloat(p.precio_costo).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>${parseFloat(p.precio_venta).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td>
                   <td>{badgeStock(p)}</td>
-                  <td><button className="btn-editar" onClick={() => abrirEditar(p)}>Editar</button></td>
+                  <td style={{ display: 'flex', gap: 4, flexWrap: 'nowrap' }}>
+                    <button className="btn-editar" onClick={() => abrirEditar(p)}>Editar</button>
+                    <button className="btn-editar" style={{ fontSize: 11, padding: '3px 7px' }} onClick={() => verHistorialPrecios(p)} title="Historial de precios">💲</button>
+                    <button className="btn-editar" style={{ fontSize: 11, padding: '3px 7px' }} onClick={() => verMovimientosStock(p)} title="Movimientos de stock">📊</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+        </>
+      )}
+
+      {/* ══ TAB INVENTARIO FÍSICO ══ */}
+      {tab === 'inventario' && (
+        <div>
+          {errInv && <p className="error-msg" style={{ marginBottom: 12 }}>{errInv}</p>}
+
+          {invActual ? (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+                <div>
+                  <strong>Inventario #{invActual.id}</strong>
+                  <span style={{ marginLeft: 12, fontSize: 12, color: '#6b7280' }}>
+                    Iniciado: {new Date(invActual.fecha).toLocaleDateString('es-AR')} — {invActual.usuario ?? 'N/A'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn btn-secundario" onClick={() => setInvActual(null)}>← Volver</button>
+                  <button className="btn btn-primary" onClick={finalizarInventario} disabled={finalizandoInv}
+                    style={{ background: '#16a34a', boxShadow: '0 4px 12px rgba(22,163,74,.25)' }}>
+                    {finalizandoInv ? 'Finalizando...' : '✓ Finalizar y ajustar stock'}
+                  </button>
+                </div>
+              </div>
+              <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
+                Ingresá la cantidad contada para cada producto. Al finalizar, el stock del sistema se actualizará.
+              </p>
+              <div className="tabla-wrapper">
+                <table>
+                  <thead><tr>
+                    <th>Código</th><th>Producto</th><th>Unidad</th>
+                    <th style={{ textAlign: 'right' }}>Stock sistema</th>
+                    <th style={{ textAlign: 'right' }}>Stock contado</th>
+                    <th style={{ textAlign: 'right' }}>Diferencia</th>
+                  </tr></thead>
+                  <tbody>
+                    {(invActual.items ?? []).map(item => {
+                      const diff = parseFloat(item.stock_contado ?? item.stock_sistema) - parseFloat(item.stock_sistema);
+                      return (
+                        <tr key={item.id} style={Math.abs(diff) > 0.001 ? { background: diff < 0 ? 'rgba(220,38,38,.04)' : 'rgba(22,163,74,.04)' } : {}}>
+                          <td><code>{item.producto_codigo}</code></td>
+                          <td>{item.producto_nombre}</td>
+                          <td style={{ fontSize: 12, color: '#6b7280' }}>{item.unidad_medida ?? 'unidades'}</td>
+                          <td style={{ textAlign: 'right' }}>{parseFloat(item.stock_sistema).toLocaleString('es-AR')}</td>
+                          <td style={{ textAlign: 'right' }}>
+                            <input
+                              type="number"
+                              step="0.01"
+                              defaultValue={item.stock_contado ?? item.stock_sistema}
+                              style={{ width: 90, textAlign: 'right', border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 8px' }}
+                              onBlur={e => actualizarItemInv(invActual.id, item.id, parseFloat(e.target.value))}
+                            />
+                          </td>
+                          <td style={{ textAlign: 'right', fontWeight: 600,
+                            color: Math.abs(diff) < 0.001 ? '#6b7280' : diff < 0 ? '#dc2626' : '#16a34a' }}>
+                            {Math.abs(diff) < 0.001 ? '—' : (diff > 0 ? '+' : '') + diff.toLocaleString('es-AR', { maximumFractionDigits: 2 })}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div>
+              {cargandoInv && <p className="estado-carga">Cargando...</p>}
+              {inventarios.length === 0 && !cargandoInv && (
+                <p className="estado-carga">No hay inventarios registrados. Iniciá uno nuevo con el botón de arriba.</p>
+              )}
+              {inventarios.length > 0 && (
+                <div className="tabla-wrapper">
+                  <table>
+                    <thead><tr>
+                      <th>ID</th><th>Fecha</th><th>Usuario</th><th>Estado</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                      {inventarios.map(inv => (
+                        <tr key={inv.id}>
+                          <td>#{inv.id}</td>
+                          <td>{new Date(inv.fecha).toLocaleDateString('es-AR')}</td>
+                          <td>{inv.usuario ?? '—'}</td>
+                          <td>
+                            <span className="badge" style={inv.estado === 'Finalizado'
+                              ? { background: '#e6f9f0', color: '#1a8a4a' }
+                              : { background: '#fef9c3', color: '#854d0e' }}>
+                              {inv.estado}
+                            </span>
+                          </td>
+                          <td>
+                            {inv.estado === 'En curso' && (
+                              <button className="btn-editar" onClick={() => cargarInvActual(inv.id)}>
+                                Continuar
+                              </button>
+                            )}
+                            {inv.estado === 'Finalizado' && (
+                              <button className="btn-editar" onClick={() => cargarInvActual(inv.id)}>
+                                Ver
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Modal historial de precios ── */}
+      {modalHistPrecios && (
+        <Modal titulo={`Historial de precios — ${modalHistPrecios.nombre}`} onCerrar={() => setModalHistPrecios(null)} ancho={560}>
+          {cargandoHistPrecios && <p style={{ color: '#6b7280', padding: 16 }}>Cargando...</p>}
+          {!cargandoHistPrecios && histPreciosData.length === 0 && (
+            <p style={{ color: '#9ca3af', padding: 16, textAlign: 'center' }}>Sin cambios de precio registrados.</p>
+          )}
+          {!cargandoHistPrecios && histPreciosData.length > 0 && (
+            <div className="tabla-wrapper">
+              <table>
+                <thead><tr>
+                  <th>Fecha</th>
+                  <th style={{ textAlign: 'right' }}>Precio anterior</th>
+                  <th style={{ textAlign: 'right' }}>Precio nuevo</th>
+                  <th>Usuario</th>
+                </tr></thead>
+                <tbody>
+                  {histPreciosData.map(h => (
+                    <tr key={h.id}>
+                      <td style={{ fontSize: 12 }}>{new Date(h.fecha).toLocaleString('es-AR')}</td>
+                      <td style={{ textAlign: 'right', color: '#dc2626' }}>${parseFloat(h.precio_anterior).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td>
+                      <td style={{ textAlign: 'right', color: '#16a34a', fontWeight: 700 }}>${parseFloat(h.precio_nuevo).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td>
+                      <td style={{ color: '#6b7280', fontSize: 13 }}>{h.usuario ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="modal-footer">
+            <button className="btn btn-secundario" onClick={() => setModalHistPrecios(null)}>Cerrar</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Modal movimientos de stock ── */}
+      {modalMovStock && (
+        <Modal titulo={`Movimientos de stock — ${modalMovStock.nombre}`} onCerrar={() => setModalMovStock(null)} ancho={640}>
+          {cargandoMovStock && <p style={{ color: '#6b7280', padding: 16 }}>Cargando...</p>}
+          {!cargandoMovStock && movStockData.length === 0 && (
+            <p style={{ color: '#9ca3af', padding: 16, textAlign: 'center' }}>Sin movimientos registrados.</p>
+          )}
+          {!cargandoMovStock && movStockData.length > 0 && (
+            <div className="tabla-wrapper">
+              <table>
+                <thead><tr>
+                  <th>Fecha</th><th>Tipo</th>
+                  <th style={{ textAlign: 'right' }}>Cant.</th>
+                  <th style={{ textAlign: 'right' }}>Stock ant.</th>
+                  <th style={{ textAlign: 'right' }}>Stock nuevo</th>
+                  <th>Referencia</th>
+                </tr></thead>
+                <tbody>
+                  {movStockData.map(m => (
+                    <tr key={m.id}>
+                      <td style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{new Date(m.fecha).toLocaleString('es-AR')}</td>
+                      <td>
+                        <span className="badge" style={{
+                          background: m.tipo === 'Venta' ? '#fef2f2' : m.tipo === 'Ingreso' ? '#e6f9f0' : '#fef9c3',
+                          color:      m.tipo === 'Venta' ? '#dc2626'  : m.tipo === 'Ingreso' ? '#16a34a' : '#854d0e',
+                        }}>{m.tipo}</span>
+                      </td>
+                      <td style={{ textAlign: 'right', fontWeight: 600,
+                        color: m.tipo === 'Venta' ? '#dc2626' : '#16a34a' }}>
+                        {m.tipo === 'Venta' ? '−' : '+'}{parseFloat(m.cantidad).toLocaleString('es-AR', { maximumFractionDigits: 2 })}
+                      </td>
+                      <td style={{ textAlign: 'right', color: '#6b7280' }}>{parseFloat(m.stock_anterior).toLocaleString('es-AR', { maximumFractionDigits: 2 })}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{parseFloat(m.stock_nuevo).toLocaleString('es-AR', { maximumFractionDigits: 2 })}</td>
+                      <td style={{ fontSize: 12, color: '#6b7280' }}>{m.referencia ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="modal-footer">
+            <button className="btn btn-secundario" onClick={() => setModalMovStock(null)}>Cerrar</button>
+          </div>
+        </Modal>
       )}
 
       {modalAbierto && (
