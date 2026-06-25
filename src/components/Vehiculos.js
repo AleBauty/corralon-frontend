@@ -3,7 +3,8 @@ import Modal from './Modal';
 
 const API     = process.env.REACT_APP_API_URL || 'http://localhost:3000';
 const ORS_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImFlMWU5NDE4ZWM0YjRjOWZiOWNiN2RlMzQ0ZjgzNWNhIiwiaCI6Im11cm11cjY0In0=';
-const ORIGEN  = [-65.2667, -24.3833]; // [lng, lat] El Carmen, Jujuy
+const ORIGEN  = [-65.2561, -24.3960]; // [lng, lat] El Carmen, Jujuy — coordenadas precisas
+const JUJUY   = { latMin: -25, latMax: -21, lngMin: -67, lngMax: -64 };
 
 /* ─────────────────────────────────────────────────────────
    HELPERS
@@ -17,6 +18,18 @@ function fechaCorta(iso) {
 function fechaLarga(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371, r = Math.PI / 180;
+  const dLat = (lat2 - lat1) * r, dLng = (lng2 - lng1) * r;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*r) * Math.cos(lat2*r) * Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+function dirDisplay(p) {
+  if (p.direccion_calle?.trim()) {
+    return `${p.direccion_calle.trim()}${p.direccion_nro ? ' ' + p.direccion_nro.trim() : ''}, ${p.direccion_ciudad?.trim() || 'El Carmen'}`;
+  }
+  return p.direccion_entrega ?? '—';
 }
 
 const ESTADOS_VEH = ['Disponible', 'En reparto', 'En mantenimiento'];
@@ -64,7 +77,7 @@ function MapaMultiRuta({ paradas, rutaGeoJSON }) {
         iconSize: [28, 28], iconAnchor: [14, 14],
       });
       L.marker([p.lat, p.lng], { icon: stopIcon }).addTo(map)
-        .bindPopup(`<strong>Parada ${n}</strong><br>${p.cliente ?? 'Sin cliente'}<br><small>${p.direccion_entrega}</small>`);
+        .bindPopup(`<strong>Parada ${n}</strong><br>${p.cliente ?? 'Sin cliente'}<br><small>${dirDisplay(p)}</small>`);
     });
 
     if (rutaGeoJSON) {
@@ -324,8 +337,8 @@ export default function Vehiculos() {
     const conDireccion = entregas.filter(e => e.direccion_calle || e.direccion_entrega);
     if (!conDireccion.length) throw new Error('Ninguna entrega tiene dirección de domicilio registrada.');
 
-    // 1. Geocodificar con campos separados; si no existen, caer en campo legacy
-    const geoParadas = [];
+    // 1. Geocodificar — focus en El Carmen, boundary Argentina, validar rango Jujuy
+    const geoResultados = [];
     for (const p of conDireccion) {
       const calle  = p.direccion_calle?.trim() || '';
       const nro    = p.direccion_nro?.trim()   || '';
@@ -334,19 +347,45 @@ export default function Vehiculos() {
         ? `${calle}${nro ? ' ' + nro : ''}, ${ciudad}, Jujuy, Argentina`
         : `${p.direccion_entrega}, Jujuy, Argentina`;
 
-      const res  = await fetch(
-        `https://api.openrouteservice.org/geocode/search?api_key=${ORS_KEY}` +
-        `&text=${encodeURIComponent(texto)}&boundary.country=AR&size=1`
-      );
-      const data = await res.json();
-      if (!data.features?.length) throw new Error(`No se pudo geocodificar: "${texto}"`);
-      const [lng, lat] = data.features[0].geometry.coordinates;
-      geoParadas.push({ ...p, lng, lat });
+      let lng, lat;
+      try {
+        const res  = await fetch(
+          `https://api.openrouteservice.org/geocode/search?api_key=${ORS_KEY}` +
+          `&text=${encodeURIComponent(texto)}` +
+          `&boundary.country=AR` +
+          `&focus.point.lon=${ORIGEN[0]}` +
+          `&focus.point.lat=${ORIGEN[1]}` +
+          `&size=1`
+        );
+        const data = await res.json();
+        if (!data.features?.length) {
+          geoResultados.push({ ...p, geoError: `No se encontró el domicilio: "${dirDisplay(p)}"` });
+          continue;
+        }
+        [lng, lat] = data.features[0].geometry.coordinates;
+      } catch {
+        geoResultados.push({ ...p, geoError: `Error de red geocodificando: "${dirDisplay(p)}"` });
+        continue;
+      }
+
+      const esValido = !(lat === 0 && lng === 0) &&
+        lat >= JUJUY.latMin && lat <= JUJUY.latMax &&
+        lng >= JUJUY.lngMin && lng <= JUJUY.lngMax;
+
+      if (!esValido) {
+        geoResultados.push({ ...p, geoError: `No se encontró el domicilio: "${dirDisplay(p)}"` });
+      } else {
+        geoResultados.push({ ...p, lng, lat });
+      }
     }
+
+    const geoParadas  = geoResultados.filter(p => !p.geoError);
+    const sinGeo      = geoResultados.filter(p =>  p.geoError);
+    if (!geoParadas.length) throw new Error('No se pudo geocodificar ningún domicilio. Verificá las direcciones.');
 
     let paradasOrdenadas = [...geoParadas];
 
-    // 2. Optimizar si hay más de 1 parada
+    // 2. Optimizar orden si hay más de 1 parada
     if (geoParadas.length > 1) {
       try {
         const optRes = await fetch('https://api.openrouteservice.org/optimization', {
@@ -360,14 +399,13 @@ export default function Vehiculos() {
         const optData = await optRes.json();
         if (optData.routes?.[0]?.steps) {
           const jobSteps = optData.routes[0].steps.filter(s => s.type === 'job');
-          if (jobSteps.length === geoParadas.length) {
+          if (jobSteps.length === geoParadas.length)
             paradasOrdenadas = jobSteps.map(s => geoParadas[s.id]);
-          }
         }
       } catch { /* fallback al orden original */ }
     }
 
-    // 3. Calcular ruta con geometry (ORIGEN → stops → ORIGEN)
+    // 3. Calcular ruta con geometry (ORIGEN → paradas → ORIGEN)
     const waypoints = [ORIGEN, ...paradasOrdenadas.map(p => [p.lng, p.lat]), ORIGEN];
     const routeRes  = await fetch(
       'https://api.openrouteservice.org/v2/directions/driving-car/geojson',
@@ -384,15 +422,25 @@ export default function Vehiculos() {
     const summary  = feature.properties.summary;
     const segments = feature.properties.segments ?? [];
 
-    // Anotar cada parada con distancia/tiempo desde la parada anterior
-    const paradasConStats = paradasOrdenadas.map((p, i) => ({
-      ...p,
-      distKm: segments[i] ? (segments[i].distance / 1000).toFixed(1) : null,
-      durMin: segments[i] ? Math.round(segments[i].duration / 60) : null,
-    }));
+    // Anotar distancia/tiempo; si ORS devuelve 0 usar Haversine
+    const paradasConStats = paradasOrdenadas.map((p, i) => {
+      const seg = segments[i];
+      let distKm = null, durMin = null, estimado = false;
+      if (seg && parseFloat(seg.distance) > 0) {
+        distKm = (seg.distance / 1000).toFixed(1);
+        durMin = Math.round(seg.duration / 60);
+      } else {
+        const prevLat = i === 0 ? ORIGEN[1] : paradasOrdenadas[i - 1].lat;
+        const prevLng = i === 0 ? ORIGEN[0] : paradasOrdenadas[i - 1].lng;
+        distKm  = haversineKm(prevLat, prevLng, p.lat, p.lng).toFixed(1);
+        estimado = true;
+      }
+      return { ...p, distKm, durMin, estimado };
+    });
 
     return {
       paradasOrdenadas: paradasConStats,
+      sinGeocodificar:  sinGeo,
       rutaGeoJSON:      feature,
       totalKm:          (summary.distance / 1000).toFixed(1),
       totalMin:         Math.round(summary.duration / 60),
@@ -830,8 +878,24 @@ export default function Vehiculos() {
             <>
               <MapaMultiRuta key={modalRuta.id} paradas={rutaData.paradasOrdenadas} rutaGeoJSON={rutaData.rutaGeoJSON} />
 
+              {/* Stops sin geocodificar */}
+              {rutaData.sinGeocodificar?.length > 0 && (
+                <div style={{ margin: '12px 0', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {rutaData.sinGeocodificar.map(p => (
+                    <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: '#fff1f0', border: '1px solid #fca5a5', borderRadius: 8 }}>
+                      <span style={{ fontSize: 16 }}>⚠</span>
+                      <div style={{ flex: 1, fontSize: 13 }}>
+                        <strong>{p.cliente ?? 'Sin cliente'}</strong>
+                        <span style={{ color: '#b91c1c', marginLeft: 8 }}>{p.geoError}</span>
+                      </div>
+                      <span style={{ background: '#fca5a5', color: '#7f1d1d', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20 }}>⚠ Domicilio no encontrado</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {/* Lista de paradas */}
-              <div style={{ marginTop: 18 }}>
+              <div style={{ marginTop: 8 }}>
                 {rutaData.paradasOrdenadas.map((p, i) => (
                   <div key={p.id} style={{
                     display: 'flex', alignItems: 'flex-start', gap: 12,
@@ -844,16 +908,18 @@ export default function Vehiculos() {
                     }}>{i + 1}</div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 14 }}>{p.cliente ?? 'Sin cliente'}</div>
-                      <div style={{ fontSize: 13, color: 'var(--naranja-oscuro)', marginTop: 2 }}>📍 {p.direccion_entrega}</div>
+                      <div style={{ fontSize: 13, color: 'var(--naranja-oscuro)', marginTop: 2 }}>📍 {dirDisplay(p)}</div>
                       {p.items?.length > 0 && (
                         <div style={{ fontSize: 12, color: 'var(--texto-suave)', marginTop: 4 }}>
                           {p.items.map(it => `${it.producto} x${parseFloat(it.cantidad).toLocaleString('es-AR')}`).join(' · ')}
                         </div>
                       )}
                     </div>
-                    {(p.distKm || p.durMin) && (
+                    {p.distKm && (
                       <div style={{ textAlign: 'right', flexShrink: 0, fontSize: 13 }}>
-                        {p.distKm && <div style={{ color: '#1d4ed8', fontWeight: 600 }}>📍 {p.distKm} km</div>}
+                        <div style={{ color: '#1d4ed8', fontWeight: 600 }}>
+                          📏 {p.estimado ? `~${p.distKm} km (est.)` : `${p.distKm} km`}
+                        </div>
                         {p.durMin && <div style={{ color: '#15803d', fontWeight: 600 }}>🕐 ~{p.durMin} min</div>}
                       </div>
                     )}
@@ -869,6 +935,9 @@ export default function Vehiculos() {
                 <span>Paradas: <strong>{rutaData.paradasOrdenadas.length}</strong></span>
                 <span>Distancia total: <strong>{rutaData.totalKm} km</strong></span>
                 <span>Tiempo estimado: <strong>~{rutaData.totalMin} min</strong></span>
+                {rutaData.sinGeocodificar?.length > 0 && (
+                  <span style={{ color: '#fca5a5' }}>⚠ {rutaData.sinGeocodificar.length} domicilio{rutaData.sinGeocodificar.length !== 1 ? 's' : ''} no encontrado{rutaData.sinGeocodificar.length !== 1 ? 's' : ''}</span>
+                )}
               </div>
 
               {/* Hoja de ruta imprimible (oculta normalmente) */}

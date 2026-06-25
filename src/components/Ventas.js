@@ -590,8 +590,14 @@ export default function Ventas() {
                 </div>
                 <div className="form-group span-2">
                   <label>Ciudad</label>
-                  <input value={direccionCiudad} onChange={e => setDireccionCiudad(e.target.value)}
+                  <input list="ciudades-jujuy" value={direccionCiudad} onChange={e => setDireccionCiudad(e.target.value)}
                     placeholder="Ej: El Carmen" />
+                  <datalist id="ciudades-jujuy">
+                    <option value="El Carmen" />
+                    <option value="San Salvador de Jujuy" />
+                    <option value="Palpalá" />
+                    <option value="Perico" />
+                  </datalist>
                 </div>
               </>
             )}
